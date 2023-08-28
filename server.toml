@@ -1,0 +1,6 @@
+port = 33445
+addr = "127.0.0.1"
+protocol = "tcp"
+
+[tcp_config]
+token = "fdasfdasfasdfasdfasdf"

@@ -1,0 +1,29 @@
+[[client]]
+server_addr = "100.1.1.1"
+server_port = 44442
+
+[[client.tcp_config]]
+
+[[client.link]]
+client_port = 22
+server_port = 15
+protocol = "tcp"
+
+[[client.link]]
+client_port = 21
+server_port = 14
+protocol = "udp"
+
+[[client]]
+server_addr = "1.1.1.1"
+server_port = 44442
+
+[[client.link]]
+client_port = 22
+server_port = 15
+protocol = "tcp"
+
+[[client.link]]
+client_port = 21
+server_port = 14
+protocol = "udp"
