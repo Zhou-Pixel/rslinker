@@ -1,16 +1,35 @@
 use crate::protocol::{
-    Accepted, BasicProtocol, ClientToServer, Port, Protocol, ServerToClient, SimpleRead,
+    BasicProtocol, Port, Factory, SimpleRead,
     SimpleWrite,
 };
-use std::{collections::HashMap, net::SocketAddr};
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::{TcpStream, UdpSocket},
+    
 };
+
+use super::server::{Message as ServerMessage, Accepted};
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum Message {
+    NewClient,
+    AcceptChannel {
+        from: i64,
+        // server_port: u16,
+        // client_port: u16,
+        // protocol: BasicProtocol,
+        port: Port,
+        number: i64,
+    },
+    PushConfig(Vec<Port>),
+    Heartbeat,
+}
 
 pub struct Client<T>
 where
-    T: Protocol,
+    T: Factory,
 {
     addr: SocketAddr,
     socket: T::Socket,
@@ -19,10 +38,11 @@ where
     // tcp_links: HashMap<u16, u16>,
     // udp_links: HashMap<u16, u16>,
     accept_conflict: bool,
+    factory: Arc<T>,
     // _marker: PhantomData<T>
 }
 
-impl<T: Protocol> Client<T> {
+impl<T: Factory> Client<T> {
     pub fn set_links(&mut self, links: HashMap<Port, u16>) {
         self.links = links;
     }
@@ -31,9 +51,9 @@ impl<T: Protocol> Client<T> {
         self.accept_conflict = accept_conflict;
     }
 
-    pub async fn connect(addr: SocketAddr) -> anyhow::Result<Self> {
+    pub async fn connect(addr: SocketAddr, protocol: T) -> anyhow::Result<Self> {
         log::info!("Try to connect to server: {addr}");
-        let socket = T::connect(addr).await?;
+        let socket = protocol.connect(addr).await?;
         log::info!("Successfully connected to the server: {addr}");
         Ok(Self {
             addr,
@@ -43,17 +63,18 @@ impl<T: Protocol> Client<T> {
             // tcp_links: Default::default(),
             // udp_links: Default::default(),
             accept_conflict: false,
+            factory: Arc::new(protocol)
         })
     }
 
     async fn new_client(&mut self) -> anyhow::Result<()> {
-        let msg = ClientToServer::NewClient;
+        let msg = Message::NewClient;
         let json = serde_json::to_vec(&msg)?;
         self.socket.write(&json).await?;
 
         let msg = self.socket.read().await?;
-        let msg = serde_json::from_slice::<ServerToClient>(&msg)?;
-        if let ServerToClient::AcceptClient { id } = msg {
+        let msg = serde_json::from_slice::<ServerMessage>(&msg)?;
+        if let ServerMessage::AcceptClient { id } = msg {
             self.id = Some(id);
             log::info!("The server accepted the client, id: {id}");
             anyhow::Ok(())
@@ -65,20 +86,23 @@ impl<T: Protocol> Client<T> {
 
     async fn push_config(&mut self) -> anyhow::Result<()> {
         let config: Vec<Port> = self.links.iter().map(|(k, _)| *k).collect();
-        let msg = ClientToServer::PushConfig(config);
+        let msg = Message::PushConfig(config);
         let msg = serde_json::to_vec(&msg)?;
+        log::info!("push config");
         self.socket.write(&msg).await?;
 
+        log::info!("push config end");
+
         let msg = self.socket.read().await?;
-        let msg = serde_json::from_slice::<ServerToClient>(&msg)?;
+        let msg = serde_json::from_slice::<ServerMessage>(&msg)?;
 
         let id = self.id.unwrap();
         match msg {
-            ServerToClient::AcceptConfig(Accepted::All) => {
+            ServerMessage::AcceptConfig(Accepted::All) => {
                 log::info!("The server accepts all configuration, id: {id}");
                 anyhow::Ok(())
             },
-            ServerToClient::AcceptConfig(Accepted::Part(ports)) if self.accept_conflict => {
+            ServerMessage::AcceptConfig(Accepted::Part(ports)) if self.accept_conflict => {
                 log::info!("The server only accepted a partial configuration, id: {id}");
                 self.links.retain(|k, _| ports.contains(&k));
 
@@ -94,21 +118,44 @@ impl<T: Protocol> Client<T> {
     pub async fn exec(&mut self) -> anyhow::Result<()> {
         self.new_client().await?;
         self.push_config().await?;
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
-            let msg = self.socket.read().await?;
-            let msg = serde_json::from_slice::<ServerToClient>(&msg)?;
-            match msg {
-                ServerToClient::NewChannel {
-                    port,
-                    random_number,
-                } => {
-                    self.accept_channel(port, random_number);
+            tokio::select! {
+                result = self.socket.read() => {
+                    let msg = result?;
+                    self.recv_msg(msg)?;
                 }
-                _ => {
-                    todo!()
+                _ = interval.tick() => {
+                    self.send_heartbeat().await?;
                 }
             }
+            let msg = self.socket.read().await?;
+            self.recv_msg(msg)?;
         }
+    }
+
+    async fn send_heartbeat(&mut self) -> anyhow::Result<()> {
+        let msg = Message::Heartbeat;
+        let msg = serde_json::to_vec(&msg)?;
+        self.socket.write(&msg).await?;
+        Ok(())
+    }
+    
+    fn recv_msg(&mut self, msg: Vec<u8>) -> anyhow::Result<()> {
+        let msg = serde_json::from_slice::<ServerMessage>(&msg)?;
+        match msg {
+            ServerMessage::NewChannel {
+                port,
+                number: random_number,
+            } => {
+                self.accept_channel(port, random_number);
+            }
+            _ => {
+                todo!()
+            }
+        }
+        Ok(())
     }
 
     fn accept_channel(&self, port: Port, number: i64) {
@@ -119,13 +166,14 @@ impl<T: Protocol> Client<T> {
         };
 
         let addr = self.addr;
+        let factory = self.factory.clone();
         tokio::spawn(async move {
             if let BasicProtocol::Tcp = port.protocol {
                 let local_addr: SocketAddr = format!("127.0.0.1:{}", local_port).parse().unwrap();
                 let mut local_socket = TcpStream::connect(local_addr).await?;
 
-                let mut socket = T::connect(addr).await?;
-                let msg = ClientToServer::AcceptChannel {
+                let mut socket = factory.connect(addr).await?;
+                let msg = Message::AcceptChannel {
                     from: id,
                     port,
                     number,
@@ -139,8 +187,8 @@ impl<T: Protocol> Client<T> {
                 let udp_socket = UdpSocket::bind("127.0.0.1:0").await?;
                 udp_socket.connect(local_addr).await?;
 
-                let mut socket = T::connect(addr).await?;
-                let msg = ClientToServer::AcceptChannel {
+                let mut socket = factory.connect(addr).await?;
+                let msg = Message::AcceptChannel {
                     from: id,
                     port,
                     number,

@@ -7,7 +7,7 @@ pub struct Configure {
 
 const fn accept_conflict_default_value() -> bool { false }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Client {
     pub server_addr: String,
     pub server_port: u16,
@@ -21,25 +21,25 @@ pub struct Client {
 }
 
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
 pub struct Link {
     pub client_port: u16,
     pub server_port: u16,
     pub protocol: String
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TcpConfig {
-    pub token: Option<String>
 }
 
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct QuicConfig {
-
+    pub crt: String,
+    pub server_name: String
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TlsConfig {
 
 }

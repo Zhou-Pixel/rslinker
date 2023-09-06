@@ -3,17 +3,13 @@ pub mod tcp;
 pub mod udp;
 
 use serde::{Deserialize, Serialize};
-use std::{marker::PhantomData, net::SocketAddr, collections::HashMap, any::Any};
+use std::{net::SocketAddr, collections::HashMap, any::Any};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream},
     net::{TcpStream, UdpSocket},
-    sync::mpsc::Receiver,
 };
 
-use crate::{
-    config::{self, client::Link},
-    utils::{chat::Employee, Never},
-};
+use crate::utils::{chat::Employee, Never};
 
 pub trait Safe: Send + Sync + 'static { }
 
@@ -22,11 +18,12 @@ pub trait Options {
 }
 
 #[async_trait::async_trait]
-pub trait Protocol: Sized + Safe {
+pub trait Factory: Sized + Safe {
     type Socket: SimpleStream + Safe;
-    async fn bind(addr: SocketAddr) -> anyhow::Result<Self>;
-    async fn accept(&self) -> anyhow::Result<(Self::Socket, SocketAddr)>;
-    async fn connect(addr: SocketAddr) -> anyhow::Result<Self::Socket>;
+    type Listener: Safe;
+    async fn bind(&self, addr: SocketAddr) -> anyhow::Result<Self::Listener>;
+    async fn accept(&self, listener: &Self::Listener) -> anyhow::Result<(Self::Socket, SocketAddr)>;
+    async fn connect(&self, addr: SocketAddr) -> anyhow::Result<Self::Socket>;
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash)]
@@ -35,54 +32,11 @@ pub struct Port {
     pub protocol: BasicProtocol,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub enum ServerToClient {
-    // NewClient,
-    AcceptClient {
-        id: i64,
-    },
 
-    NewChannel {
-        // server_port: u16,
-        // client_port: u16,
-        // protocol: BasicProtocol,
-        port: Port,
-        random_number: i64,
-    },
-    // AcceptLink {
-    //     from: i64,
-    //     server_port: u16,
-    //     client_port: u16,
-    //     protocol: config::TransportProtocol,
-    //     random_number: u64,
-    // },
 
-    // PushConfig(Vec<Link>),
-    AcceptConfig(Accepted),
 
-    Heartbeat,
-}
 
-#[derive(Serialize, Deserialize, Debug)]
-pub enum ClientToServer {
-    NewClient,
-    AcceptChannel {
-        from: i64,
-        // server_port: u16,
-        // client_port: u16,
-        // protocol: BasicProtocol,
-        port: Port,
-        number: i64,
-    },
-    PushConfig(Vec<Port>),
-    Heartbeat,
-}
 
-#[derive(Serialize, Deserialize, Debug)]
-pub enum Accepted {
-    All,
-    Part(Vec<Port>),
-}
 
 pub enum Command {
     Close,
@@ -103,7 +57,7 @@ pub trait SimpleRead: AsyncRead + Unpin {
     async fn read(&mut self) -> anyhow::Result<Vec<u8>> {
         let size = self.read_u64_le().await? as u64;
         let mut buf = vec![0; size as usize];
-        let _ = self.read_exact(&mut buf).await?;
+        self.read_exact(&mut buf).await?;
         anyhow::Ok(buf)
     }
 }

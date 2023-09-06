@@ -12,7 +12,6 @@ use tokio::{
 pub struct UdpServer {
     // table: HashMap<SocketAddr, UnboundedSender<Vec<u8>>>,
     recver: UnboundedReceiver<UdpClient>,
-    socket: Arc<UdpSocket>,
     shutdown: UnboundedSender<()>,
 }
 
@@ -83,7 +82,6 @@ impl UdpServer {
         Ok(Self {
             // table: Default::default(),
             recver,
-            socket,
             shutdown: shutdown_tx,
         })
     }
@@ -92,9 +90,6 @@ impl UdpServer {
         self.recver.recv().await.unwrap()
     }
 
-    async fn received_data(addr: SocketAddr, data: Vec<u8>) {
-        
-    }
 
 }
 

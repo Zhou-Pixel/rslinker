@@ -1,6 +1,10 @@
 port = 33445
-addr = "127.0.0.1"
+addr = "0.0.0.0"
 protocol = "tcp"
 
 [tcp_config]
-token = "fdasfdasfasdfasdfasdf"
+
+
+[quic_config]
+crt = "./localhost.crt"
+key = "./localhost.key"

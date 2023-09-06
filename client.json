@@ -1,0 +1,46 @@
+{
+  "client": [
+    {
+      "server_addr": "127.0.0.1",
+      "server_port": 33445,
+      "accept_conflict": false,
+      "link": [
+        {
+          "client_port": 56,
+          "server_port": 55,
+          "protocol": "udp"
+        },
+        {
+          "client_port": 5556,
+          "server_port": 5525,
+          "protocol": "udp"
+        }
+      ],
+      "protocol": "tls",
+      "tcp_config": {},
+      "quic_config": null,
+      "tls_config": null
+    },
+    {
+      "server_addr": "127.0.0.1",
+      "server_port": 33445,
+      "accept_conflict": false,
+      "link": [
+        {
+          "client_port": 5126,
+          "server_port": 535,
+          "protocol": "tcp"
+        },
+        {
+          "client_port": 5556,
+          "server_port": 5525,
+          "protocol": "udp"
+        }
+      ],
+      "protocol": "tcp",
+      "tcp_config": {},
+      "quic_config": null,
+      "tls_config": null
+    }
+  ]
+}

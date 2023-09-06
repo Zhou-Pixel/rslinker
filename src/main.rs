@@ -1,10 +1,17 @@
-use crypto2::blockcipher::Aes256;
-use simplelog::{CombinedLogger, TermLogger, Config, SharedLogger};
 use clap::{arg, Parser};
-use tokio::io::{AsyncReadExt, self};
-use std::{path::PathBuf, net::SocketAddr, collections::HashMap};
-use rslinker::{config, protocol::{tcp::TcpProtocol, Port, BasicProtocol}};
+use rslinker::{
+    config,
+    protocol::{quic::QuicFactory, tcp::TcpFactory, BasicProtocol, Port},
+};
+use simplelog::{CombinedLogger, Config, TermLogger};
+use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
+use tokio::{
+    fs::File,
+    io::{self, AsyncReadExt},
+};
 
+#[cfg(test)]
+mod test;
 
 #[derive(Debug, Parser)]
 struct Command {
@@ -14,93 +21,15 @@ struct Command {
     #[arg(long)]
     client: bool,
 
-    #[arg(short, long, value_name="CONFIG")]
-    config: Option<PathBuf>
-}
-
-
-#[cfg(test)]
-mod test {
-    use tokio::{fs, io::{AsyncWriteExt, AsyncReadExt}};
-    use rslinker::config::client::*;
-
-    #[tokio::test]
-    async fn write_config() -> anyhow::Result<()> {
-        let mut opt = fs::OpenOptions::new();
-        opt.create(true).write(true);
-        let mut file = opt.open("./client.toml").await?;
-        let config = Configure {
-            client: vec![
-                Client {
-                    server_addr: "127.0.0.1".to_string(),
-                    server_port: 33445,
-                    accept_conflict: false,
-                    link: vec![
-                        Link {
-                            client_port: 56,
-                            server_port: 55,
-                            protocol: "udp".to_string()
-                        },
-                        Link {
-                            client_port: 5556,
-                            server_port: 5525,
-                            protocol: "udp".to_string()
-                        }
-                    ],
-                    protocol: "tls".to_string(),
-                    tcp_config: Some(TcpConfig {
-                        token: Some("tcp_token".to_string())
-                    }),
-                    quic_config: None,
-                    tls_config: None
-                },
-                Client {
-                    server_addr: "127.0.0.1".to_string(),
-                    server_port: 33445,
-                    accept_conflict: false,
-                    link: vec![
-                        Link {
-                            client_port: 5126,
-                            server_port: 535,
-                            protocol: "tcp".to_string()
-                        },
-                        Link {
-                            client_port: 5556,
-                            server_port: 5525,
-                            protocol: "udp".to_string()
-                        }
-                    ],
-                    protocol: "tcp".to_string(),
-                    tcp_config: Some(TcpConfig {
-                        token: Some("tcp_token".to_string())
-                    }),
-                    quic_config: None,
-                    tls_config: None
-                }
-            ]
-        };
-
-        let config = toml::to_string(&config)?;
-        file.write_all(config.as_bytes()).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn read_config() -> anyhow::Result<()> {
-        let mut file = fs::File::open("./client.toml").await?;
-        let mut content = String::new();
-        file.read_to_string(&mut content).await?;
-        let config: Configure = toml::from_str(&content)?;
-        println!("config is: {:#?}", config);
-        Ok(())
-    }
+    #[arg(short, long, value_name = "CONFIG")]
+    config: Option<PathBuf>,
 }
 
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cmd = Command::parse();
-    
+
     log_init()?;
 
     if cmd.server && cmd.client {
@@ -118,16 +47,13 @@ async fn main() -> anyhow::Result<()> {
 
     if cmd.server {
         let config = toml::from_str::<config::server::Server>(&content)?;
-        run_server(config).await;
+        run_server(config).await?;
     } else {
         let config: config::client::Configure = toml::from_str(&content)?;
         run_client(config);
     }
 
-    handle_ctrl_c(||{
-        log::info!("todo: close application");
-        true
-    }).await?;
+    handle_ctrl_c().await?;
     Ok(())
 }
 
@@ -150,7 +76,14 @@ fn log_init() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_server(config: config::server::Server) {
+async fn read_all(path: &str) -> anyhow::Result<String> {
+    let mut file = File::open(path).await?;
+    let mut buf = String::new();
+    file.read_to_string(&mut buf).await?;
+    Ok(buf)
+}
+
+async fn run_server(config: config::server::Server) -> anyhow::Result<()> {
     use rslinker::server::Server;
     // use rslinker::protocol::tcp::TcpOptions;
     let addr = config.addr.unwrap_or("0.0.0.0".to_string());
@@ -163,17 +96,31 @@ async fn run_server(config: config::server::Server) {
     //     }
     // }
     if config.protocol == "tcp" {
-        let server: Server<TcpProtocol> = Server::new(addr);
+        let server: Server<TcpFactory> = Server::new(addr, Default::default());
         server.run();
         log::info!("tcp server is running");
+    } else if config.protocol == "quic" {
+        let mut quic = QuicFactory::new();
+        let quic_config = config.quic_config.as_ref().unwrap();
+        let crt = read_all(quic_config.crt.as_str()).await?;
+        let key = read_all(&quic_config.key.as_str()).await?;
+        quic.set_crt(crt);
+        quic.set_key(key);
+
+        let server: Server<QuicFactory> = Server::new(addr, quic);
+        server.run();
+        log::info!("quic server is running");
     } else {
         unimplemented!();
     }
+    Ok(())
 }
 
 fn run_client(config: config::client::Configure) {
-    for i in &config.client {
-        let addr: SocketAddr = format!("{}:{}", i.server_addr, i.server_port).parse().unwrap();
+    for i in config.client {
+        let addr: SocketAddr = format!("{}:{}", i.server_addr, i.server_port)
+            .parse()
+            .unwrap();
         log::info!("client addr is {}", addr);
         let mut links = HashMap::new();
         for j in &i.link {
@@ -183,9 +130,15 @@ fn run_client(config: config::client::Configure) {
                 _ => {
                     log::warn!("unknown protocol {}", j.protocol);
                     continue;
-                },
+                }
             };
-            links.insert(Port { port: j.server_port, protocol }, j.client_port);
+            links.insert(
+                Port {
+                    port: j.server_port,
+                    protocol,
+                },
+                j.client_port,
+            );
         }
         let protocol = i.protocol.clone();
         let accept_conflict = i.accept_conflict;
@@ -194,17 +147,27 @@ fn run_client(config: config::client::Configure) {
             match protocol.as_str() {
                 "tcp" => {
                     log::info!("starting a new tcp tcp client, config: {:?}", links);
-                    let mut client: Client<TcpProtocol> = Client::connect(addr).await?;
+                    let mut client: Client<TcpFactory> =
+                        Client::connect(addr, Default::default()).await?;
                     client.set_accept_conflict(accept_conflict);
                     client.set_links(links);
                     client.exec().await?;
-                },
+                }
                 "tls" => {
                     unimplemented!("tls protocol");
-                },
+                }
                 "quic" => {
-                    unimplemented!("quic protocol");
-                },
+                    let mut quic = QuicFactory::new();
+                    let quic_config = i.quic_config.as_ref().unwrap();
+                    let crt = read_all(quic_config.crt.as_str()).await?;
+                    quic.set_crt(crt);
+                    quic.set_server_name(quic_config.server_name.clone());
+
+                    let mut client: Client<QuicFactory> = Client::connect(addr, quic).await?;
+                    client.set_accept_conflict(accept_conflict);
+                    client.set_links(links);
+                    client.exec().await?;
+                }
                 _ => {
                     log::warn!("not support protocol {}", protocol);
                     return Err(anyhow::anyhow!("not support protocol"));
@@ -215,21 +178,9 @@ fn run_client(config: config::client::Configure) {
     }
 }
 
-async fn handle_ctrl_c(f: impl Fn() -> bool + Send + Sync) -> anyhow::Result<()> {
-    #[cfg(windows)]
-    {
-        use tokio::signal::windows;
-        let mut signal = windows::ctrl_c()?;
-        loop {
-            signal.recv().await;
-            if f() {
-                break;
-            }
-        }
-        anyhow::Ok(())
-    }
-    #[cfg(unix)]
-    {
-        todo!("unix ctrl c handler");
-    }
+async fn handle_ctrl_c() -> anyhow::Result<()> {
+    use tokio::signal;
+    signal::ctrl_c().await?;
+    Ok(())
+
 }

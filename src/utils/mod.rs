@@ -7,7 +7,8 @@ use std::task::{Context, Poll};
 pub struct Never;
 
 impl Never {
-    pub fn never() -> Self {
+    #[inline]
+    pub const fn never() -> Self {
         Never {}
     }
 }

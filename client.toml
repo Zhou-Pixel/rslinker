@@ -5,19 +5,13 @@ accept_conflict = false
 protocol = "tcp"
 
 [[client.link]]
-client_port = 5051
-server_port = 55553
-protocol = "tcp"
+client_port = 56
+server_port = 55
+protocol = "udp"
 
 [[client.link]]
 client_port = 5000
-server_port = 53553
-protocol = "tcp"
-
-[[client.link]]
-client_port = 6000
-server_port = 23543
+server_port = 5525
 protocol = "tcp"
 
 [client.tcp_config]
-token = "fdasfdasfasdfasdfasdf"

@@ -1,42 +1,72 @@
 mod controller;
 mod monitor;
 
-use crate::protocol::Protocol;
 use crate::protocol::udp::UdpClient;
+use crate::protocol::Factory;
 use crate::protocol::{
-    BasicProtocol, ClientToServer, Port, ServerToClient, SimpleRead, SimpleStream, SimpleWrite,
+    BasicProtocol, Port, SimpleRead, SimpleStream
 };
 use controller::TcpSocketInfo;
-use controller::UdpAddress;
 use controller::UdpRecverInfo;
 use fast_async_mutex::RwLock;
-use log::info;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio::sync::mpsc::UnboundedReceiver;
 use std::{
     collections::{HashMap, HashSet},
-    marker::PhantomData,
     net::SocketAddr,
     sync::Arc,
     time::Duration,
 };
+use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use super::client;
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum Message {
+    // NewClient,
+    AcceptClient {
+        id: i64,
+    },
+
+    NewChannel {
+        // server_port: u16,
+        // client_port: u16,
+        // protocol: BasicProtocol,
+        port: Port,
+        number: i64,
+    },
+    // AcceptLink {
+    //     from: i64,
+    //     server_port: u16,
+    //     client_port: u16,
+    //     protocol: config::TransportProtocol,
+    //     random_number: u64,
+    // },
+
+    // PushConfig(Vec<Link>),
+    AcceptConfig(Accepted),
+
+    Heartbeat,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum Accepted {
+    All,
+    Part(Vec<Port>),
+}
 
 pub struct Server<T>
 where
-    T: Protocol,
+    T: Factory,
 {
     addr: SocketAddr,
     tcp_sockets: Arc<RwLock<HashMap<i64, Vec<TcpSocketInfo>>>>,
     udp_recvers: Arc<RwLock<HashMap<i64, Vec<UdpRecverInfo>>>>,
     using_ports: Arc<RwLock<HashSet<Port>>>,
-    _marker: PhantomData<T>,
+    factory: Arc<T>,
 }
-
 
 impl<T> Clone for Server<T>
 where
-    T: Protocol,
+    T: Factory,
 {
     fn clone(&self) -> Self {
         Self {
@@ -44,35 +74,34 @@ where
             tcp_sockets: Arc::clone(&self.tcp_sockets),
             using_ports: Arc::clone(&self.using_ports),
             udp_recvers: Arc::clone(&self.udp_recvers),
-            _marker: Default::default(),
+            factory: Arc::clone(&self.factory),
         }
     }
-
 }
 
 impl<T> Server<T>
 where
-    T: Protocol,
+    T: Factory,
     T::Socket: SimpleStream,
 {
-    pub fn new(addr: SocketAddr) -> Self {
+    pub fn new(addr: SocketAddr, protocol: T) -> Self {
         Self {
             addr,
             tcp_sockets: Default::default(),
             using_ports: Default::default(),
             udp_recvers: Default::default(),
-            _marker: Default::default(),
+            factory: Arc::new(protocol),
         }
     }
     // async fn bind(addr: SocketAddr) -> anyhow::Result<Self> {
     //     Ok(Self { listener: T::bind(addr).await? })
     // }
 
-    pub fn run(mut self) {
+    pub fn run(self) {
         tokio::spawn(async move {
-            let listener = T::bind(self.addr).await?;
+            let listener = self.factory.bind(self.addr).await?;
             loop {
-                let (socket, _) = listener.accept().await?;
+                let (socket, _) = self.factory.accept(&listener).await?;
                 log::info!("new connection in coming");
                 self.clone().on_new_connection(socket);
             }
@@ -145,14 +174,14 @@ where
     fn on_new_connection(self, mut socket: T::Socket) {
         tokio::spawn(async move {
             let json = SimpleRead::read(&mut socket).await?;
-            let msg = serde_json::from_slice::<ClientToServer>(&json)?;
+            let msg = serde_json::from_slice::<client::Message>(&json)?;
             match msg {
-                ClientToServer::NewClient => {
+                client::Message::NewClient => {
                     log::info!("client connected");
                     let controller = controller::Controller::new(&self, socket);
                     controller.run();
                 }
-                ClientToServer::AcceptChannel { from, port, number } => {
+                client::Message::AcceptChannel { from, port, number } => {
                     log::info!("client accepted channel: {:?}", port);
                     if let BasicProtocol::Tcp = port.protocol {
                         self.accept_tcp_channel(from, port.port, number, socket);
@@ -168,7 +197,6 @@ where
             anyhow::Ok(())
         });
     }
-
 
     fn accept_udp_channel(self, from: i64, port: u16, number: i64, mut socket: T::Socket) {
         tokio::spawn(async move {
@@ -191,12 +219,11 @@ where
             let _ = tokio::io::copy_bidirectional(&mut socket, &mut remote_socket).await;
         });
     }
-
 }
 
 async fn copy<T>(stream: &mut T, udp_recver: &mut UdpClient) -> anyhow::Result<()>
 where
-    T: AsyncRead + AsyncWrite + Unpin + 'static
+    T: AsyncRead + AsyncWrite + Unpin + 'static,
 {
     use tokio::time::timeout;
     loop {

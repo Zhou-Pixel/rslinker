@@ -1,3 +1,4 @@
+use std::time::Duration;
 use std::{
     collections::HashSet,
     net::SocketAddr,
@@ -7,14 +8,15 @@ use tokio::{
     net::TcpStream,
     io::AsyncReadExt,
 };
-
-use super::{Server, monitor};
+use super::{Server, monitor, Message as ServerMessage, Accepted};
 use crate::protocol::{SimpleWrite, BasicProtocol};
 use crate::protocol::udp::UdpClient;
 use crate::{
-    protocol::{ClientToServer, Port, Protocol, ServerToClient, SimpleRead, SimpleStream},
+    protocol::{Port, Factory, SimpleRead, SimpleStream},
     utils::chat,
 };
+
+use crate::client;
 
 
 pub enum Message {
@@ -41,7 +43,7 @@ pub struct TcpSocketInfo {
     pub socket: TcpStream,
 }
 
-pub struct Controller<T: Protocol> {
+pub struct Controller<T: Factory> {
     server: Server<T>,
     socket: T::Socket,
     id: Option<i64>,
@@ -49,7 +51,7 @@ pub struct Controller<T: Protocol> {
     leader: chat::Leader<(), Message, Port>,
 }
 
-impl<T: Protocol> Controller<T>
+impl<T: Factory> Controller<T>
 where
     T::Socket: SimpleStream,
 {
@@ -68,23 +70,21 @@ where
             self.accept_client().await?;
             self.accept_config().await?;
             self.start_monitors().await;
+            use tokio::time::timeout;
             loop {
-                let mut buf = Vec::new();
                 tokio::select! {
-                    result = self.socket.read_buf(&mut buf) => {
+                    result = timeout(Duration::from_secs(5), SimpleRead::read(&mut self.socket)) => {
                         match result {
-                            Ok(size) if size != 0 => {
-                                log::info!(
-                                    "Unknown information: {}", 
-                                    String::from_utf8(buf[..size].to_vec()).unwrap_or_default()
-                                );
-                            },
+                            Ok(Ok(msg)) if msg.len() != 0 => {
+                                self.recv_msg(msg)?;
+                            }
                             _ => {
                                 log::info!("Client disconnect {}", self.id.unwrap());
                                 self.cleanup().await;
-                            },
+                                break;                                
+                            }
                         }
-                    },
+                    }
                     result = self.leader.receive() => {
                         let (port, msg) = result;
                         self.new_channel(port, msg).await?;
@@ -94,13 +94,28 @@ where
             anyhow::Ok(())
         });
     }
+    
+    fn recv_msg(&self, msg: Vec<u8>) -> anyhow::Result<()> {
+        let msg: client::Message = serde_json::from_slice(&msg)?;
+        match msg {
+            client::Message::Heartbeat => {
+                log::trace!("heartbeat from client");
+            },
+            _ => {
+                log::warn!("undefined msg: {:?}", msg);
+            }
+        }
+        Ok(())
+    }
 
     async fn new_channel(&mut self, port: Port, msg: Message) -> anyhow::Result<()> {
         match msg {
             Message::NewTcp(socket) => {
+                log::info!("New tcp channel");
                 self.new_tcp_channel(port, socket).await?;
             }
             Message::NewUdp(socket) => {
+                log::info!("New udp channel");
                 self.new_udp_channel(
                     port,
                     socket
@@ -128,20 +143,21 @@ where
                 Some(60 * 10),
             )
             .await;
-        let msg = ServerToClient::NewChannel {
+        let msg = ServerMessage::NewChannel {
             port,
-            random_number: number,
+            number,
         };
         let msg = serde_json::to_vec(&msg)?;
         self.socket.write(&msg).await?;
+        log::info!("Request udp channel");
         Ok(())
     }
 
     async fn new_tcp_channel(&mut self, port: Port, socket: TcpStream) -> anyhow::Result<()> {
         let number = time::OffsetDateTime::now_utc().unix_timestamp();
-        let msg = ServerToClient::NewChannel {
+        let msg = ServerMessage::NewChannel {
             port,
-            random_number: number,
+            number,
         };
         let msg = serde_json::to_vec(&msg)?;
         self.server
@@ -156,6 +172,7 @@ where
             )
             .await;
         self.socket.write(&msg).await?;
+        log::info!("Request client tcp channel");
         Ok(())
     }
 
@@ -169,7 +186,7 @@ where
 
     async fn accept_client(&mut self) -> anyhow::Result<()> {
         let id = time::OffsetDateTime::now_utc().unix_timestamp();
-        let msg = ServerToClient::AcceptClient { id };
+        let msg = ServerMessage::AcceptClient { id };
         let msg = serde_json::to_vec(&msg)?;
         self.socket.write(&msg).await?;
         self.id = Some(id);
@@ -178,24 +195,24 @@ where
 
     async fn accept_config(&mut self) -> anyhow::Result<()> {
         let msg = SimpleRead::read(&mut self.socket).await?;
-        let ClientToServer::PushConfig(ports) = serde_json::from_slice::<ClientToServer>(&msg)? else {
+        let client::Message::PushConfig(ports) = serde_json::from_slice::<client::Message>(&msg)? else {
             return Err(anyhow::anyhow!("incorret msg"));
         };
         let mut success = Vec::new();
         let mut failed = Vec::new();
         let mut write_lock = self.server.using_ports.write().await;
-        for i in &ports {
-            if write_lock.contains(i) {
-                failed.push(*i);
+        for i in ports {
+            if write_lock.contains(&i) {
+                failed.push(i);
             } else {
-                write_lock.insert(*i);
-                success.push(*i);
+                write_lock.insert(i);
+                success.push(i);
             }
         }
         let msg = if failed.is_empty() {
-            ServerToClient::AcceptConfig(crate::protocol::Accepted::All)
+            ServerMessage::AcceptConfig(Accepted::All)
         } else {
-            ServerToClient::AcceptConfig(crate::protocol::Accepted::Part(success.clone()))
+            ServerMessage::AcceptConfig(Accepted::Part(success.clone()))
         };
         let msg = serde_json::to_vec(&msg)?;
         self.socket.write(&msg).await?;
