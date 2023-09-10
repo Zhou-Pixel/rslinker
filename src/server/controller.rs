@@ -4,10 +4,7 @@ use std::{
     net::SocketAddr,
 };
 
-use tokio::{
-    net::TcpStream,
-    io::AsyncReadExt,
-};
+use tokio::net::TcpStream;
 use super::{Server, monitor, Message as ServerMessage, Accepted};
 use crate::protocol::{SimpleWrite, BasicProtocol};
 use crate::protocol::udp::UdpClient;
@@ -79,7 +76,7 @@ where
                                 self.recv_msg(msg)?;
                             }
                             _ => {
-                                log::info!("Client disconnect {}", self.id.unwrap());
+                                log::info!("Client disconnect {} {:?}", self.id.unwrap(), result);
                                 self.cleanup().await;
                                 break;                                
                             }
@@ -214,6 +211,7 @@ where
         } else {
             ServerMessage::AcceptConfig(Accepted::Part(success.clone()))
         };
+        log::info!("accept config: {:?}", msg);
         let msg = serde_json::to_vec(&msg)?;
         self.socket.write(&msg).await?;
         self.ports = success.iter().map(|v| *v).collect::<HashSet<Port>>();

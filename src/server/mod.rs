@@ -101,11 +101,17 @@ where
         tokio::spawn(async move {
             let listener = self.factory.bind(self.addr).await?;
             loop {
-                let (socket, _) = self.factory.accept(&listener).await?;
-                log::info!("new connection in coming");
-                self.clone().on_new_connection(socket);
+                match self.factory.accept(&listener).await {
+                    Ok((socket, _)) => {
+                        log::info!("new connection in coming");
+                        self.clone().on_new_connection(socket);
+                    },
+                    Err(err) => return Result::<(), _>::Err(anyhow::Error::from(err)),
+                }
+                // let (socket, _) = self.factory.accept(&listener).await?;
+                // log::info!("new connection in coming");
+                // self.clone().on_new_connection(socket);
             }
-            anyhow::Ok(())
         });
     }
 

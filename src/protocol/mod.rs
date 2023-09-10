@@ -68,7 +68,7 @@ pub trait SimpleWrite: AsyncWrite + Unpin {
     async fn write(&mut self, data: &[u8]) -> anyhow::Result<()> {
         let size = data.len();
         self.write_u64_le(size as u64).await?;
-        self.write_all(data).await?;
+        self.write_all(data).await?; 
         anyhow::Ok(())
     }
 }

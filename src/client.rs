@@ -1,16 +1,12 @@
-use crate::protocol::{
-    BasicProtocol, Port, Factory, SimpleRead,
-    SimpleWrite,
-};
+use crate::protocol::{BasicProtocol, Factory, Port, SimpleRead, SimpleWrite};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::{TcpStream, UdpSocket},
-    
 };
 
-use super::server::{Message as ServerMessage, Accepted};
+use super::server::{Accepted, Message as ServerMessage};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Message {
@@ -63,7 +59,7 @@ impl<T: Factory> Client<T> {
             // tcp_links: Default::default(),
             // udp_links: Default::default(),
             accept_conflict: false,
-            factory: Arc::new(protocol)
+            factory: Arc::new(protocol),
         })
     }
 
@@ -88,10 +84,10 @@ impl<T: Factory> Client<T> {
         let config: Vec<Port> = self.links.iter().map(|(k, _)| *k).collect();
         let msg = Message::PushConfig(config);
         let msg = serde_json::to_vec(&msg)?;
-        log::info!("push config");
+        log::info!("Start to push config");
         self.socket.write(&msg).await?;
 
-        log::info!("push config end");
+        log::info!("Finish pushing config end");
 
         let msg = self.socket.read().await?;
         let msg = serde_json::from_slice::<ServerMessage>(&msg)?;
@@ -101,16 +97,21 @@ impl<T: Factory> Client<T> {
             ServerMessage::AcceptConfig(Accepted::All) => {
                 log::info!("The server accepts all configuration, id: {id}");
                 anyhow::Ok(())
-            },
+            }
             ServerMessage::AcceptConfig(Accepted::Part(ports)) if self.accept_conflict => {
-                log::info!("The server only accepted a partial configuration, id: {id}");
-                self.links.retain(|k, _| ports.contains(&k));
+                if ports.is_empty() && !self.links.is_empty() {
+                    log::error!("No config was accepted");
+                    Err(anyhow::anyhow!("no config was accepted"))
+                } else {
+                    log::info!("The server only accepted a partial configuration, id: {id}");
+                    self.links.retain(|k, _| ports.contains(&k));
 
-                anyhow::Ok(())
+                    anyhow::Ok(())
+                }
             }
             _ => {
                 log::info!("Push configuration failed, id: {id}");
-                Err(anyhow::anyhow!("push config error: {:?}", msg))
+                Err(anyhow::anyhow!("push config failed: {:?}", msg))
             }
         }
     }
@@ -120,19 +121,24 @@ impl<T: Factory> Client<T> {
         self.push_config().await?;
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        interval.tick().await;
+        log::info!("tick end");
         loop {
             tokio::select! {
-                result = self.socket.read() => {
-                    let msg = result?;
-                    self.recv_msg(msg)?;
-                }
                 _ = interval.tick() => {
                     self.send_heartbeat().await?;
                 }
+                result = self.socket.read() => {
+                    let msg = result?;
+                    if msg.len() == 0 {
+                        log::info!("Disconnect!");
+                        break;
+                    }
+                    self.recv_msg(msg)?;
+                }
             }
-            let msg = self.socket.read().await?;
-            self.recv_msg(msg)?;
         }
+        anyhow::Ok(())
     }
 
     async fn send_heartbeat(&mut self) -> anyhow::Result<()> {
@@ -141,15 +147,12 @@ impl<T: Factory> Client<T> {
         self.socket.write(&msg).await?;
         Ok(())
     }
-    
+
     fn recv_msg(&mut self, msg: Vec<u8>) -> anyhow::Result<()> {
         let msg = serde_json::from_slice::<ServerMessage>(&msg)?;
         match msg {
-            ServerMessage::NewChannel {
-                port,
-                number: random_number,
-            } => {
-                self.accept_channel(port, random_number);
+            ServerMessage::NewChannel { port, number } => {
+                self.accept_channel(port, number);
             }
             _ => {
                 todo!()
@@ -169,7 +172,7 @@ impl<T: Factory> Client<T> {
         let factory = self.factory.clone();
         tokio::spawn(async move {
             if let BasicProtocol::Tcp = port.protocol {
-                let local_addr: SocketAddr = format!("127.0.0.1:{}", local_port).parse().unwrap();
+                let local_addr: SocketAddr = (([127, 0, 0, 1], local_port)).into();
                 let mut local_socket = TcpStream::connect(local_addr).await?;
 
                 let mut socket = factory.connect(addr).await?;
@@ -183,9 +186,10 @@ impl<T: Factory> Client<T> {
 
                 tokio::io::copy_bidirectional(&mut socket, &mut local_socket).await?;
             } else {
-                let local_addr: SocketAddr = format!("127.0.0.1:{}", local_port).parse().unwrap();
-                let udp_socket = UdpSocket::bind("127.0.0.1:0").await?;
-                udp_socket.connect(local_addr).await?;
+                let udp_socket = UdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?;
+                udp_socket
+                    .connect(SocketAddr::from(([127, 0, 0, 1], local_port)))
+                    .await?;
 
                 let mut socket = factory.connect(addr).await?;
                 let msg = Message::AcceptChannel {

@@ -103,7 +103,7 @@ async fn run_server(config: config::server::Server) -> anyhow::Result<()> {
         let mut quic = QuicFactory::new();
         let quic_config = config.quic_config.as_ref().unwrap();
         let crt = read_all(quic_config.crt.as_str()).await?;
-        let key = read_all(&quic_config.key.as_str()).await?;
+        let key = read_all(quic_config.key.as_str()).await?;
         quic.set_crt(crt);
         quic.set_key(key);
 
@@ -144,14 +144,14 @@ fn run_client(config: config::client::Configure) {
         let accept_conflict = i.accept_conflict;
         tokio::spawn(async move {
             use rslinker::client::Client;
-            match protocol.as_str() {
+            let result = match protocol.as_str() {
                 "tcp" => {
                     log::info!("starting a new tcp tcp client, config: {:?}", links);
                     let mut client: Client<TcpFactory> =
                         Client::connect(addr, Default::default()).await?;
                     client.set_accept_conflict(accept_conflict);
                     client.set_links(links);
-                    client.exec().await?;
+                    client.exec().await
                 }
                 "tls" => {
                     unimplemented!("tls protocol");
@@ -166,12 +166,15 @@ fn run_client(config: config::client::Configure) {
                     let mut client: Client<QuicFactory> = Client::connect(addr, quic).await?;
                     client.set_accept_conflict(accept_conflict);
                     client.set_links(links);
-                    client.exec().await?;
+                    client.exec().await
                 }
                 _ => {
                     log::warn!("not support protocol {}", protocol);
                     return Err(anyhow::anyhow!("not support protocol"));
                 }
+            };
+            if result.is_err() {
+                log::error!("Disconnected server_addr: {}, error:{:?}", addr, result.unwrap_err());
             }
             anyhow::Ok(())
         });
