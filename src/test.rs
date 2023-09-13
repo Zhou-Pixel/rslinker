@@ -12,6 +12,8 @@ fn make_client_config() -> Configure {
                 server_addr: "127.0.0.1".to_string(),
                 server_port: 33445,
                 accept_conflict: false,
+                heartbeat_interval: 1000,
+                retry_times: 3,
                 link: vec![
                     Link {
                         client_port: 56,
@@ -34,6 +36,8 @@ fn make_client_config() -> Configure {
                 server_addr: "127.0.0.1".to_string(),
                 server_port: 33445,
                 accept_conflict: false,
+                heartbeat_interval: 1000,
+                retry_times: 3,
                 link: vec![
                     Link {
                         client_port: 5126,

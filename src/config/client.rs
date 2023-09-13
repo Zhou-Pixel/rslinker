@@ -7,12 +7,23 @@ pub struct Configure {
 
 const fn accept_conflict_default_value() -> bool { false }
 
+const fn heartbeat_interval_default_value() -> u64 { 1000 }
+
+const fn retry_times_default_value() -> u32 { 0 }
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Client {
     pub server_addr: String,
     pub server_port: u16,
     #[serde(default="accept_conflict_default_value")]
     pub accept_conflict: bool,
+
+    #[serde(default="heartbeat_interval_default_value")]
+    pub heartbeat_interval: u64,
+
+    #[serde(default="retry_times_default_value")]
+    pub retry_times: u32, 
+
     pub link: Vec<Link>,
     pub protocol: String,
     pub tcp_config: Option<TcpConfig>,

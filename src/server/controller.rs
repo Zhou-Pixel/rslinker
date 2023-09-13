@@ -44,6 +44,7 @@ pub struct Controller<T: Factory> {
     server: Server<T>,
     socket: T::Socket,
     id: Option<i64>,
+    heartbeat_interval: Option<u64>,
     ports: HashSet<Port>,
     leader: chat::Leader<(), Message, Port>,
 }
@@ -57,6 +58,7 @@ where
             server: server.clone(),
             socket,
             id: None,
+            heartbeat_interval: None,
             ports: Default::default(),
             leader: Default::default(),
         }
@@ -68,9 +70,10 @@ where
             self.accept_config().await?;
             self.start_monitors().await;
             use tokio::time::timeout;
+            let duration = Duration::from_millis(self.heartbeat_interval.unwrap() * 5);
             loop {
                 tokio::select! {
-                    result = timeout(Duration::from_secs(5), SimpleRead::read(&mut self.socket)) => {
+                    result = timeout(duration, SimpleRead::read(&mut self.socket)) => {
                         match result {
                             Ok(Ok(msg)) if msg.len() != 0 => {
                                 self.recv_msg(msg)?;
@@ -192,9 +195,12 @@ where
 
     async fn accept_config(&mut self) -> anyhow::Result<()> {
         let msg = SimpleRead::read(&mut self.socket).await?;
-        let client::Message::PushConfig(ports) = serde_json::from_slice::<client::Message>(&msg)? else {
+        let client::Message::PushConfig{ports, heartbeat_interval} = serde_json::from_slice::<client::Message>(&msg)? else {
             return Err(anyhow::anyhow!("incorret msg"));
         };
+
+        self.heartbeat_interval = Some(heartbeat_interval);
+
         let mut success = Vec::new();
         let mut failed = Vec::new();
         let mut write_lock = self.server.using_ports.write().await;

@@ -19,7 +19,10 @@ pub enum Message {
         port: Port,
         number: i64,
     },
-    PushConfig(Vec<Port>),
+    PushConfig {
+        ports: Vec<Port>,
+        heartbeat_interval: u64
+    },
     Heartbeat,
 }
 
@@ -35,6 +38,8 @@ where
     // udp_links: HashMap<u16, u16>,
     accept_conflict: bool,
     factory: Arc<T>,
+    heartbeat_interval: u64,
+    retry_time: u32
     // _marker: PhantomData<T>
 }
 
@@ -47,9 +52,18 @@ impl<T: Factory> Client<T> {
         self.accept_conflict = accept_conflict;
     }
 
-    pub async fn connect(addr: SocketAddr, protocol: T) -> anyhow::Result<Self> {
+    pub fn set_heartbeat_interval(&mut self, heartbeat_interval: u64) {
+        self.heartbeat_interval = heartbeat_interval;
+    }
+
+    pub fn set_retry_times(&mut self, retry_times: u32) {
+        self.retry_time = retry_times;
+    }
+
+
+    pub async fn connect(addr: SocketAddr, factory: T) -> anyhow::Result<Self> {
         log::info!("Try to connect to server: {addr}");
-        let socket = protocol.connect(addr).await?;
+        let socket = factory.connect(addr).await?;
         log::info!("Successfully connected to the server: {addr}");
         Ok(Self {
             addr,
@@ -59,7 +73,9 @@ impl<T: Factory> Client<T> {
             // tcp_links: Default::default(),
             // udp_links: Default::default(),
             accept_conflict: false,
-            factory: Arc::new(protocol),
+            factory: Arc::new(factory),
+            heartbeat_interval: 1000,
+            retry_time: 0
         })
     }
 
@@ -73,7 +89,7 @@ impl<T: Factory> Client<T> {
         if let ServerMessage::AcceptClient { id } = msg {
             self.id = Some(id);
             log::info!("The server accepted the client, id: {id}");
-            anyhow::Ok(())
+            Ok(())
         } else {
             log::info!("Server rejected client");
             Err(anyhow::anyhow!("incorret msg: {:?}", msg))
@@ -82,7 +98,10 @@ impl<T: Factory> Client<T> {
 
     async fn push_config(&mut self) -> anyhow::Result<()> {
         let config: Vec<Port> = self.links.iter().map(|(k, _)| *k).collect();
-        let msg = Message::PushConfig(config);
+        let msg = Message::PushConfig {
+            ports: config,
+            heartbeat_interval: self.heartbeat_interval
+        };
         let msg = serde_json::to_vec(&msg)?;
         log::info!("Start to push config");
         self.socket.write(&msg).await?;
@@ -96,7 +115,7 @@ impl<T: Factory> Client<T> {
         match msg {
             ServerMessage::AcceptConfig(Accepted::All) => {
                 log::info!("The server accepts all configuration, id: {id}");
-                anyhow::Ok(())
+                Ok(())
             }
             ServerMessage::AcceptConfig(Accepted::Part(ports)) if self.accept_conflict => {
                 if ports.is_empty() && !self.links.is_empty() {
@@ -106,7 +125,7 @@ impl<T: Factory> Client<T> {
                     log::info!("The server only accepted a partial configuration, id: {id}");
                     self.links.retain(|k, _| ports.contains(&k));
 
-                    anyhow::Ok(())
+                    Ok(())
                 }
             }
             _ => {
@@ -117,28 +136,63 @@ impl<T: Factory> Client<T> {
     }
 
     pub async fn exec(&mut self) -> anyhow::Result<()> {
-        self.new_client().await?;
-        self.push_config().await?;
-        let mut interval = tokio::time::interval(Duration::from_secs(1));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        interval.tick().await;
-        log::info!("tick end");
         loop {
-            tokio::select! {
-                _ = interval.tick() => {
-                    self.send_heartbeat().await?;
-                }
-                result = self.socket.read() => {
-                    let msg = result?;
-                    if msg.len() == 0 {
-                        log::info!("Disconnect!");
-                        break;
+            let result = async {
+                self.new_client().await?;
+                self.push_config().await?;
+                let mut interval = tokio::time::interval(Duration::from_millis(self.heartbeat_interval));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                interval.tick().await;
+                loop {
+                    tokio::select! {
+                        _ = interval.tick() => {
+                            self.send_heartbeat().await?;
+                        }
+                        result = self.socket.read() => {
+                            let msg = result?;
+                            if msg.len() == 0 {
+                                log::info!("Disconnect!");
+                                break;
+                            }
+                            self.recv_msg(msg)?;
+                        }
                     }
-                    self.recv_msg(msg)?;
                 }
+                anyhow::Ok(())
+            }.await;
+
+            log::info!("Retry to connect: {:?}", result);
+
+
+            self.reconnect_to_server().await?;
+        }
+        // anyhow::Ok(())
+    }
+
+    async fn reconnect_to_server(&mut self) -> anyhow::Result<()> {
+        let mut retry_times = self.retry_time;
+        if retry_times <= 0 {
+            return Err(anyhow::anyhow!("set retry_times > 0 to enable reconnect to server"));
+        }
+        loop {
+            match self.factory.connect(self.addr).await {
+                Ok(socket) => {
+                    self.socket = socket;
+                    log::info!("Reconnect successfully");
+                    break anyhow::Ok(());
+                },
+                Err(err) => {
+                    retry_times -= 1;
+                    log::info!("Left times: {}", retry_times);
+                    if retry_times <= 0 {
+                        log::info!("Failed to reconnect");
+                        return Err(anyhow::Error::from(err));
+                    }
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    continue;
+                },
             }
         }
-        anyhow::Ok(())
     }
 
     async fn send_heartbeat(&mut self) -> anyhow::Result<()> {

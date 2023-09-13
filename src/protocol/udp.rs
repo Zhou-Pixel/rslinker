@@ -3,10 +3,7 @@ use fast_async_mutex::RwLock;
 
 use tokio::{
     net::UdpSocket,
-    sync::{
-        mpsc::{self, UnboundedReceiver, UnboundedSender},
-        oneshot::{self, Sender, Receiver}
-    },
+    sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
 };
 
 pub struct UdpServer {

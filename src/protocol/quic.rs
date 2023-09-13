@@ -90,6 +90,7 @@ impl Safe for QuicListner {
 }
 
 pub struct QuicSocket {
+    #[allow(dead_code)]
     connection: Connection,
     socket: BidirectionalStream
 }

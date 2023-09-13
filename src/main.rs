@@ -151,6 +151,7 @@ fn run_client(config: config::client::Configure) {
                         Client::connect(addr, Default::default()).await?;
                     client.set_accept_conflict(accept_conflict);
                     client.set_links(links);
+                    client.set_retry_times(i.retry_times);
                     client.exec().await
                 }
                 "tls" => {

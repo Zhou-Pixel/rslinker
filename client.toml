@@ -2,6 +2,7 @@
 server_addr = "127.0.0.1"
 server_port = 33445
 accept_conflict = false
+retry_times = 3
 protocol = "tcp"
 
 [[client.link]]
