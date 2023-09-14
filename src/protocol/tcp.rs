@@ -21,11 +21,11 @@ impl super::Factory for TcpFactory {
     type Socket = TcpSocket;
     type Listener = TcpListener;
     async fn bind(&self, addr: SocketAddr) -> anyhow::Result<Self::Listener> {
-        anyhow::Ok(TcpListener::bind(addr).await?)
+        Ok(TcpListener::bind(addr).await?)
     }
     async fn accept(&self, listener: &Self::Listener) -> anyhow::Result<(Self::Socket, SocketAddr)> {
         let (socket, addr) = listener.accept().await?;
-        anyhow::Ok((TcpSocket {
+        Ok((TcpSocket {
            socket,
            size: None,
            buf: vec![]
@@ -33,7 +33,7 @@ impl super::Factory for TcpFactory {
     }
 
     async fn connect(&self, addr: SocketAddr) -> anyhow::Result<Self::Socket> {
-        anyhow::Ok(TcpSocket {
+        Ok(TcpSocket {
             socket: TcpStream::connect(addr).await?,
             size: None,
             buf: vec![]
@@ -53,7 +53,7 @@ impl SimpleRead for TcpStream {
         log::info!("read number end");
         let mut buf = vec![0; size];
         self.read_exact(&mut buf).await?;
-        anyhow::Ok(buf)
+        Ok(buf)
     }
 }
 
@@ -65,7 +65,7 @@ impl SimpleWrite for TcpStream {
         self.write_u64_le(size as u64).await?;
         self.write_all(data).await?;
         self.flush().await?;
-        anyhow::Ok(())
+        Ok(())
     }
 }
 pub struct TcpSocket {
@@ -131,18 +131,18 @@ impl TcpSocket {
 
         let u64size = std::mem::size_of::<u64>();
         while self.buf.len() < u64size {
-            let mut buf = Vec::with_capacity(1024);
+            let mut buf = Vec::with_capacity(u64size);
             let size = self.socket.read_buf(&mut buf).await?;
             self.buf.extend_from_slice(&buf[..size]);
         }
 
-        let mut tmp: Vec<u8> = self.buf.drain(..u64size).collect();
+        let mut tmp = std::mem::take(&mut self.buf);
         if !is_little_endian() {
             tmp.reverse();
         }
 
         self.size = Some(unsafe {std::ptr::read(tmp.as_ptr() as *const _)});
-        anyhow::Ok(())
+        Ok(())
     }
 }
 
@@ -157,12 +157,12 @@ impl SimpleRead for TcpSocket {
         };
 
         while self.buf.len() < size {
-            let mut tmp = Vec::with_capacity(1024);
+            let mut tmp = Vec::with_capacity(size);
             let size = self.socket.read_buf(&mut tmp).await?;
             self.buf.extend_from_slice(&tmp[..size]);
         }
         self.size = None;
-        anyhow::Ok(self.buf.drain(..size).collect())
+        Ok(std::mem::take(&mut self.buf))
     }
 }
 
@@ -173,7 +173,7 @@ impl SimpleWrite for TcpSocket {
         self.write_u64_le(size as u64).await?;
         self.write_all(data).await?;
         self.socket.flush().await?;
-        anyhow::Ok(())
+        Ok(())
     }
 }
 

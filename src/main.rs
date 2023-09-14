@@ -4,7 +4,7 @@ use rslinker::{
     protocol::{quic::QuicFactory, tcp::TcpFactory, BasicProtocol, Port},
 };
 use simplelog::{CombinedLogger, Config, TermLogger};
-use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
+use std::{collections::HashMap, net::SocketAddr, path::PathBuf, str::FromStr};
 use tokio::{
     fs::File,
     io::{self, AsyncReadExt},
@@ -127,17 +127,23 @@ fn run_client(config: config::client::Configure) {
             let protocol = match j.protocol.as_str() {
                 "tcp" => BasicProtocol::Tcp,
                 "udp" => BasicProtocol::Udp,
+                "ssh" => BasicProtocol::Tcp,
                 _ => {
                     log::warn!("unknown protocol {}", j.protocol);
                     continue;
                 }
             };
+            let addr = format!("{}:{}", j.local_addr, j.local_port);
+            let Ok(addr) = SocketAddr::from_str(&addr) else {
+                log::info!("Invalid addr: {}", addr);
+                continue;
+            };
             links.insert(
                 Port {
-                    port: j.server_port,
+                    port: j.remote_port,
                     protocol,
                 },
-                j.client_port,
+                addr
             );
         }
         let protocol = i.protocol.clone();

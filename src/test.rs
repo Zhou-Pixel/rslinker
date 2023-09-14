@@ -16,18 +16,21 @@ fn make_client_config() -> Configure {
                 retry_times: 3,
                 link: vec![
                     Link {
-                        client_port: 56,
-                        server_port: 55,
+                        local_addr: "127.0.0.1".to_string(),
+                        local_port: 56,
+                        remote_port: 55,
                         protocol: "udp".to_string(),
                     },
                     Link {
-                        client_port: 5556,
-                        server_port: 5525,
+                        local_addr: "127.0.0.1".to_string(),
+                        local_port: 5556,
+                        remote_port: 5525,
                         protocol: "udp".to_string(),
                     },
                 ],
                 protocol: "tls".to_string(),
                 tcp_config: Some(TcpConfig {
+                    no_delay: true
                 }),
                 quic_config: None,
                 tls_config: None,
@@ -40,18 +43,21 @@ fn make_client_config() -> Configure {
                 retry_times: 3,
                 link: vec![
                     Link {
-                        client_port: 5126,
-                        server_port: 535,
+                        local_addr: "127.0.0.1".to_string(),
+                        local_port: 5126,
+                        remote_port: 535,
                         protocol: "tcp".to_string(),
                     },
                     Link {
-                        client_port: 5556,
-                        server_port: 5525,
+                        local_addr: "127.0.0.1".to_string(),
+                        local_port: 5556,
+                        remote_port: 5525,
                         protocol: "udp".to_string(),
                     },
                 ],
                 protocol: "tcp".to_string(),
                 tcp_config: Some(TcpConfig {
+                    no_delay: true
                 }),
                 quic_config: None,
                 tls_config: None,

@@ -8,7 +8,6 @@ use crate::protocol::{
 };
 use controller::TcpSocketInfo;
 use controller::UdpRecverInfo;
-use fast_async_mutex::RwLock;
 use std::{
     collections::{HashMap, HashSet},
     net::SocketAddr,
@@ -17,31 +16,20 @@ use std::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::sync::oneshot;
 use super::client;
+use crate::utils::ARwLock;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Message {
-    // NewClient,
     AcceptClient {
         id: i64,
     },
 
     NewChannel {
-        // server_port: u16,
-        // client_port: u16,
-        // protocol: BasicProtocol,
         port: Port,
         number: i64,
     },
-    // AcceptLink {
-    //     from: i64,
-    //     server_port: u16,
-    //     client_port: u16,
-    //     protocol: config::TransportProtocol,
-    //     random_number: u64,
-    // },
-
-    // PushConfig(Vec<Link>),
     AcceptConfig(Accepted),
 
     Heartbeat,
@@ -58,9 +46,9 @@ where
     T: Factory,
 {
     addr: SocketAddr,
-    tcp_sockets: Arc<RwLock<HashMap<i64, Vec<TcpSocketInfo>>>>,
-    udp_recvers: Arc<RwLock<HashMap<i64, Vec<UdpRecverInfo>>>>,
-    using_ports: Arc<RwLock<HashSet<Port>>>,
+    tcp_sockets: ARwLock<HashMap<i64, Vec<(TcpSocketInfo, oneshot::Sender<()>)>>>,
+    udp_recvers: ARwLock<HashMap<i64, Vec<(UdpRecverInfo, oneshot::Sender<()>)>>>,
+    using_ports: ARwLock<HashSet<Port>>,
     factory: Arc<T>,
 }
 
@@ -122,26 +110,35 @@ where
         }
         let port = info.port;
         let number = info.number;
-        write_lock.get_mut(&id).unwrap().push(info);
+
+        let (sender, recver) = oneshot::channel();
+        write_lock.get_mut(&id).unwrap().push((info, sender));
+
         if let Some(timeout) = timeout {
             let cloned = self.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_secs(timeout)).await;
-                cloned.remove_waiting_udp_recver(id, port, number).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(timeout)) => {
+                        cloned.take_waiting_udp_recver(id, port, number).await;
+                    }
+                    _ = recver => {
+                        
+                    }
+                }
             });
         }
     }
 
-    async fn remove_waiting_udp_recver(
+    async fn take_waiting_udp_recver(
         &self,
         id: i64,
         port: u16,
         number: i64,
     ) -> Option<UdpRecverInfo> {
         let mut write_lock = self.udp_recvers.write().await;
-        let Some(infos) = write_lock.get_mut(&id) else { return None; };
-        let Some(index) = infos.iter().position(|v| v.port == port && v.number == number) else { return None; };
-        Some(infos.remove(index))
+        let infos = write_lock.get_mut(&id)?;
+        let index = infos.iter().position(|v| v.0.port == port && v.0.number == number)?;
+        Some(infos.remove(index).0)
     }
 
     async fn add_waiting_tcp_socket(&self, id: i64, info: TcpSocketInfo, timeout: Option<u64>) {
@@ -153,28 +150,33 @@ where
 
         let port = info.port;
         let number = info.number;
-        infos.push(info);
+        let (sender, recver) = oneshot::channel();
+        infos.push((info, sender));
         let cloned = self.clone();
         if let Some(timeout) = timeout {
             tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_secs(timeout)).await;
-                cloned.remove_waiting_tcp_socket(id, port, number).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(timeout)) => {
+                        cloned.take_waiting_tcp_socket(id, port, number).await;
+                    }
+                    _ = recver => {
+                        
+                    }
+                }
             });
         }
     }
 
-    async fn remove_waiting_tcp_socket(
+    async fn take_waiting_tcp_socket(
         &self,
         id: i64,
         port: u16,
         number: i64,
     ) -> Option<TcpSocketInfo> {
         let mut write_lock = self.tcp_sockets.write().await;
-        let Some(infos) = write_lock.get_mut(&id) else { return None; };
-        let Some(index) = infos.iter().position(|v| v.port == port && v.number == number) else {
-            return None;
-        };
-        Some(infos.remove(index))
+        let infos = write_lock.get_mut(&id)?;
+        let index = infos.iter().position(|v| v.0.port == port && v.0.number == number)?;
+        Some(infos.remove(index).0)
     }
 
     fn on_new_connection(self, mut socket: T::Socket) {
@@ -206,7 +208,7 @@ where
 
     fn accept_udp_channel(self, from: i64, port: u16, number: i64, mut socket: T::Socket) {
         tokio::spawn(async move {
-            let info = self.remove_waiting_udp_recver(from, port, number).await;
+            let info = self.take_waiting_udp_recver(from, port, number).await;
             let mut udp_socket = match info {
                 Some(info) => info.socket,
                 None => return,
@@ -217,7 +219,7 @@ where
 
     fn accept_tcp_channel(self, from: i64, port: u16, number: i64, mut socket: T::Socket) {
         tokio::spawn(async move {
-            let info = self.remove_waiting_tcp_socket(from, port, number).await;
+            let info = self.take_waiting_tcp_socket(from, port, number).await;
             let mut remote_socket = match info {
                 Some(info) => info.socket,
                 None => return,

@@ -34,13 +34,19 @@ pub struct Client {
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
 pub struct Link {
-    pub client_port: u16,
-    pub server_port: u16,
+    pub local_addr: String,
+    pub local_port: u16,
+    pub remote_port: u16,
     pub protocol: String
 }
 
+
+const fn no_delay_default_value() -> bool { true }
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TcpConfig {
+    #[serde(default="no_delay_default_value")]
+    pub no_delay: bool
 }
 
 

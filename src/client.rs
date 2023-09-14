@@ -33,7 +33,7 @@ where
     addr: SocketAddr,
     socket: T::Socket,
     id: Option<i64>,
-    links: HashMap<Port, u16>,
+    links: HashMap<Port, SocketAddr>,
     // tcp_links: HashMap<u16, u16>,
     // udp_links: HashMap<u16, u16>,
     accept_conflict: bool,
@@ -44,7 +44,7 @@ where
 }
 
 impl<T: Factory> Client<T> {
-    pub fn set_links(&mut self, links: HashMap<Port, u16>) {
+    pub fn set_links(&mut self, links: HashMap<Port, SocketAddr>) {
         self.links = links;
     }
 
@@ -217,7 +217,7 @@ impl<T: Factory> Client<T> {
 
     fn accept_channel(&self, port: Port, number: i64) {
         let id = self.id.unwrap();
-        let local_port = match self.links.get(&port) {
+        let local_addr = match self.links.get(&port) {
             Some(p) => *p,
             None => return,
         };
@@ -226,7 +226,6 @@ impl<T: Factory> Client<T> {
         let factory = self.factory.clone();
         tokio::spawn(async move {
             if let BasicProtocol::Tcp = port.protocol {
-                let local_addr: SocketAddr = (([127, 0, 0, 1], local_port)).into();
                 let mut local_socket = TcpStream::connect(local_addr).await?;
 
                 let mut socket = factory.connect(addr).await?;
@@ -238,11 +237,14 @@ impl<T: Factory> Client<T> {
                 let msg = serde_json::to_vec(&msg)?;
                 socket.write(&msg).await?;
 
-                tokio::io::copy_bidirectional(&mut socket, &mut local_socket).await?;
+                log::info!("copy tcp bidirectional local_addr: {}", local_addr);
+                let result = tokio::io::copy_bidirectional(&mut socket, &mut local_socket).await;
+                log::info!("copy tcp result: {:?}", result);
+                result?;
             } else {
                 let udp_socket = UdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?;
                 udp_socket
-                    .connect(SocketAddr::from(([127, 0, 0, 1], local_port)))
+                    .connect(local_addr)
                     .await?;
 
                 let mut socket = factory.connect(addr).await?;
@@ -270,7 +272,7 @@ impl<T: Factory> Client<T> {
 
 async fn copy<T>(stream: &mut T, socket: &UdpSocket) -> anyhow::Result<()>
 where
-    T: AsyncRead + AsyncWrite + Unpin + 'static,
+    T: AsyncRead + AsyncWrite + Unpin
 {
     use tokio::io::AsyncReadExt;
     use tokio::io::AsyncWriteExt;

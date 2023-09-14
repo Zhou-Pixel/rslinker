@@ -21,3 +21,4 @@ toml = "0.7"
 crypto2 = { git = "https://github.com/shadowsocks/crypto2.git" }
 time = "0.3"
 s2n-quic = "1"
+quinn = "0.10.2"

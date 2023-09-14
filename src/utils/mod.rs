@@ -3,6 +3,12 @@ pub mod chat;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::sync::Arc;
+use fast_async_mutex::RwLock;
+
+
+pub type ARwLock<T> = Arc<RwLock<T>>;
+
 
 pub struct Never;
 

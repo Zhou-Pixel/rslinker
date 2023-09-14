@@ -35,8 +35,8 @@ pub struct UdpRecverInfo {
 }
 
 pub struct TcpSocketInfo {
-    pub number: i64,
     pub port: u16,
+    pub number: i64,
     pub socket: TcpStream,
 }
 
@@ -68,7 +68,7 @@ where
         tokio::spawn(async move {
             self.accept_client().await?;
             self.accept_config().await?;
-            self.start_monitors().await;
+            self.start_monitors();
             use tokio::time::timeout;
             let duration = Duration::from_millis(self.heartbeat_interval.unwrap() * 5);
             loop {
@@ -195,8 +195,8 @@ where
 
     async fn accept_config(&mut self) -> anyhow::Result<()> {
         let msg = SimpleRead::read(&mut self.socket).await?;
-        let client::Message::PushConfig{ports, heartbeat_interval} = serde_json::from_slice::<client::Message>(&msg)? else {
-            return Err(anyhow::anyhow!("incorret msg"));
+        let client::Message::PushConfig{ ports, heartbeat_interval } = serde_json::from_slice::<client::Message>(&msg)? else {
+            anyhow::bail!("Incorrent msg");
         };
 
         self.heartbeat_interval = Some(heartbeat_interval);
@@ -224,7 +224,7 @@ where
         anyhow::Ok(())
     }
 
-    async fn start_monitors(&mut self) {
+    fn start_monitors(&mut self) {
         for i in &self.ports {
             log::info!("Start listening: {:?}", i);
             if let BasicProtocol::Tcp = i.protocol {
