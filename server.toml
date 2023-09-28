@@ -1,10 +1,16 @@
 port = 33445
-addr = "0.0.0.0"
-protocol = "tcp"
+#addr = "0.0.0.0"
+protocol = "tls"
 
 [tcp_config]
 
 
 [quic_config]
-crt = "./localhost.crt"
+cert = "./localhost.crt"
 key = "./localhost.key"
+
+[tls_config]
+cert = "./certs/server.cert"
+key = "./certs/server.key"
+
+

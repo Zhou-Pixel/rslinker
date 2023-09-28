@@ -29,9 +29,9 @@ fn make_client_config() -> Configure {
                     },
                 ],
                 protocol: "tls".to_string(),
-                tcp_config: Some(TcpConfig {
-                    no_delay: true
-                }),
+                tcp_config: TcpConfig {
+                    nodelay: true
+                },
                 quic_config: None,
                 tls_config: None,
             },
@@ -56,9 +56,9 @@ fn make_client_config() -> Configure {
                     },
                 ],
                 protocol: "tcp".to_string(),
-                tcp_config: Some(TcpConfig {
-                    no_delay: true
-                }),
+                tcp_config: TcpConfig {
+                    nodelay: true
+                },
                 quic_config: None,
                 tls_config: None,
             },

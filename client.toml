@@ -1,9 +1,9 @@
 [[client]]
-server_addr = "120.46.221.65"
+server_addr = "127.0.0.1"
 server_port = 33445
 accept_conflict = false
 retry_times = 3
-protocol = "tcp"
+protocol = "tls"
 
 [[client.link]]
 local_addr = "127.0.0.1"
@@ -12,9 +12,21 @@ remote_port = 55323
 protocol = "tcp"
 
 [[client.link]]
-local_addr = "127.0.0.1"
-local_port = 5000
+local_addr = "192.168.100.1"
+local_port = 80
 remote_port = 5525
 protocol = "tcp"
 
 [client.tcp_config]
+
+[client.quic_config]
+cert = "./localhost.crt"
+server_name = "localhost"
+
+[client.tls_config]
+# cert = "./certs/client.cert"
+# key = "./certs/client.key"
+ca = "./certs/ca.cert"
+server_name = "localhost"
+
+

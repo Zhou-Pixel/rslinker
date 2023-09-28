@@ -1,4 +1,4 @@
-use crate::protocol::{BasicProtocol, Factory, Port, SimpleRead, SimpleWrite};
+use crate::protocol::{BasicProtocol, Factory, Port, SimpleRead, SimpleWrite, Address};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
@@ -26,11 +26,13 @@ pub enum Message {
     Heartbeat,
 }
 
+
+
 pub struct Client<T>
 where
     T: Factory,
 {
-    addr: SocketAddr,
+    addr: Address,
     socket: T::Socket,
     id: Option<i64>,
     links: HashMap<Port, SocketAddr>,
@@ -61,10 +63,10 @@ impl<T: Factory> Client<T> {
     }
 
 
-    pub async fn connect(addr: SocketAddr, factory: T) -> anyhow::Result<Self> {
-        log::info!("Try to connect to server: {addr}");
-        let socket = factory.connect(addr).await?;
-        log::info!("Successfully connected to the server: {addr}");
+    pub async fn connect(addr: Address, factory: T) -> anyhow::Result<Self> {
+        log::info!("Try to connect to server: {addr:?}");
+        let socket = factory.connect(addr.socketaddr()).await?;
+        log::info!("Successfully connected to the server: {addr:?}");
         Ok(Self {
             addr,
             socket,
@@ -172,14 +174,14 @@ impl<T: Factory> Client<T> {
     async fn reconnect_to_server(&mut self) -> anyhow::Result<()> {
         let mut retry_times = self.retry_time;
         if retry_times <= 0 {
-            return Err(anyhow::anyhow!("set retry_times > 0 to enable reconnect to server"));
+            anyhow::bail!("set retry_times > 0 to enable reconnect to server");
         }
         loop {
-            match self.factory.connect(self.addr).await {
+            match self.factory.connect(self.addr.socketaddr()).await {
                 Ok(socket) => {
                     self.socket = socket;
                     log::info!("Reconnect successfully");
-                    break anyhow::Ok(());
+                    break Ok(());
                 },
                 Err(err) => {
                     retry_times -= 1;
@@ -204,8 +206,10 @@ impl<T: Factory> Client<T> {
 
     fn recv_msg(&mut self, msg: Vec<u8>) -> anyhow::Result<()> {
         let msg = serde_json::from_slice::<ServerMessage>(&msg)?;
+        log::info!("recv msg: {msg:?}");
         match msg {
             ServerMessage::NewChannel { port, number } => {
+                log::info!("ready to accept channel: {:?}", port);
                 self.accept_channel(port, number);
             }
             _ => {
@@ -222,13 +226,16 @@ impl<T: Factory> Client<T> {
             None => return,
         };
 
-        let addr = self.addr;
+        log::info!("local addr: {local_addr}");
+
+        let addr = self.addr.clone();
         let factory = self.factory.clone();
         tokio::spawn(async move {
             if let BasicProtocol::Tcp = port.protocol {
+                log::info!("start to connect to local addr: {addr:?}");
                 let mut local_socket = TcpStream::connect(local_addr).await?;
 
-                let mut socket = factory.connect(addr).await?;
+                let mut socket = factory.connect(addr.socketaddr()).await?;
                 let msg = Message::AcceptChannel {
                     from: id,
                     port,
@@ -247,7 +254,7 @@ impl<T: Factory> Client<T> {
                     .connect(local_addr)
                     .await?;
 
-                let mut socket = factory.connect(addr).await?;
+                let mut socket = factory.connect(addr.socketaddr()).await?;
                 let msg = Message::AcceptChannel {
                     from: id,
                     port,
@@ -276,17 +283,19 @@ where
 {
     use tokio::io::AsyncReadExt;
     use tokio::io::AsyncWriteExt;
+    let mut stream_buf = Vec::with_capacity(4096);
+    let mut socket_buf = Vec::with_capacity(4096);
     loop {
-        let mut stream_buf = Vec::new();
-        let mut socket_buf = vec![];
         tokio::select! {
             result = stream.read_buf(&mut stream_buf) => {
                 let size = result?;
                 socket.send(&stream_buf[..size]).await?;
+                stream_buf.clear();
             },
             result = socket.recv_buf(&mut socket_buf) => {
                 let size = result?;
                 stream.write_all(&socket_buf[..size]).await?;
+                socket_buf.clear();
             }
         }
     }

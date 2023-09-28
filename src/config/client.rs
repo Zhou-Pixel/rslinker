@@ -11,6 +11,12 @@ const fn heartbeat_interval_default_value() -> u64 { 1000 }
 
 const fn retry_times_default_value() -> u32 { 0 }
 
+const fn tcp_config_default_value() -> TcpConfig {
+    TcpConfig {
+        nodelay: true
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Client {
     pub server_addr: String,
@@ -26,7 +32,10 @@ pub struct Client {
 
     pub link: Vec<Link>,
     pub protocol: String,
-    pub tcp_config: Option<TcpConfig>,
+    
+    #[serde(default="tcp_config_default_value")]
+    pub tcp_config: TcpConfig,
+    
     pub quic_config: Option<QuicConfig>,
     pub tls_config: Option<TlsConfig>
 }
@@ -41,24 +50,31 @@ pub struct Link {
 }
 
 
-const fn no_delay_default_value() -> bool { true }
+const fn nodelay_default_value() -> bool { true }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TcpConfig {
-    #[serde(default="no_delay_default_value")]
-    pub no_delay: bool
+    #[serde(default="nodelay_default_value")]
+    pub nodelay: bool
 }
 
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct QuicConfig {
-    pub crt: String,
+    pub cert: String,
     pub server_name: String
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TlsConfig {
+    pub ca: String,
+    pub server_name: Option<String>,
 
+    #[serde(default)]
+    pub enable_client_auth: bool,
+    pub cert: Option<String>,
+    pub key: Option<String>
+    
 }
 
 

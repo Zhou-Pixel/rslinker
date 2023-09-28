@@ -4,46 +4,55 @@ use tokio::{net::{TcpListener, TcpStream}, io::{AsyncReadExt, AsyncWriteExt}};
 use super::{Safe, SimpleRead, SimpleStream, SimpleWrite};
 
 use tokio::io::{AsyncWrite, AsyncRead};
+use bytes::BytesMut;
 
 #[derive(Default)]
-pub struct TcpFactory;
+pub struct TcpFactory {
+    nodelay: bool,
+}
 
+impl TcpFactory {
 
+    pub fn new() -> Self {
+        Default::default()
+    }
 
-impl Safe for TcpFactory {}
+    pub fn set_nodelay(&mut self, nodelay: bool) {
+        self.nodelay = nodelay;
+    }
+}
 
-impl Safe for TcpListener {}
-
-impl Safe for TcpStream {}
 
 #[async_trait::async_trait]
 impl super::Factory for TcpFactory {
     type Socket = TcpSocket;
-    type Listener = TcpListener;
-    async fn bind(&self, addr: SocketAddr) -> anyhow::Result<Self::Listener> {
+    type Acceptor = TcpListener;
+    async fn bind(&self, addr: SocketAddr) -> anyhow::Result<Self::Acceptor> {
         Ok(TcpListener::bind(addr).await?)
     }
-    async fn accept(&self, listener: &Self::Listener) -> anyhow::Result<(Self::Socket, SocketAddr)> {
+
+    async fn accept(&self, listener: &Self::Acceptor) -> anyhow::Result<(Self::Socket, SocketAddr)> {
         let (socket, addr) = listener.accept().await?;
+        socket.set_nodelay(self.nodelay)?;
         Ok((TcpSocket {
            socket,
            size: None,
-           buf: vec![]
+           buf: BytesMut::new()
         }, addr))
     }
 
     async fn connect(&self, addr: SocketAddr) -> anyhow::Result<Self::Socket> {
+        let socket = TcpStream::connect(addr).await?;
+        log::info!("connected!: {addr} {socket:?} {:?}", socket.peer_addr());
+        socket.set_nodelay(self.nodelay)?;
         Ok(TcpSocket {
-            socket: TcpStream::connect(addr).await?,
+            socket,
             size: None,
-            buf: vec![]
+            buf: BytesMut::new()
         })
     }
 }
 
-impl SimpleStream for TcpStream {
-    
-}
 
 #[async_trait::async_trait]
 impl SimpleRead for TcpStream {
@@ -71,7 +80,7 @@ impl SimpleWrite for TcpStream {
 pub struct TcpSocket {
     socket: TcpStream,
     size: Option<usize>,
-    buf: Vec<u8>
+    buf: BytesMut
 }
 
 impl AsyncWrite for TcpSocket {
@@ -131,12 +140,10 @@ impl TcpSocket {
 
         let u64size = std::mem::size_of::<u64>();
         while self.buf.len() < u64size {
-            let mut buf = Vec::with_capacity(u64size);
-            let size = self.socket.read_buf(&mut buf).await?;
-            self.buf.extend_from_slice(&buf[..size]);
+            self.socket.read_buf(&mut self.buf).await?;
         }
 
-        let mut tmp = std::mem::take(&mut self.buf);
+        let mut tmp = self.buf.split_to(u64size);
         if !is_little_endian() {
             tmp.reverse();
         }
@@ -157,12 +164,10 @@ impl SimpleRead for TcpSocket {
         };
 
         while self.buf.len() < size {
-            let mut tmp = Vec::with_capacity(size);
-            let size = self.socket.read_buf(&mut tmp).await?;
-            self.buf.extend_from_slice(&tmp[..size]);
+            self.socket.read_buf(&mut self.buf).await?;
         }
         self.size = None;
-        Ok(std::mem::take(&mut self.buf))
+        Ok(std::mem::take(&mut self.buf).to_vec())
     }
 }
 
@@ -177,11 +182,5 @@ impl SimpleWrite for TcpSocket {
     }
 }
 
-impl SimpleStream for TcpSocket {
-    
-}
 
-impl Safe for TcpSocket {
-    
-}
 

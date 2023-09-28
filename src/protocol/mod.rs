@@ -1,28 +1,64 @@
 pub mod quic;
 pub mod tcp;
 pub mod udp;
+pub mod tls;
 
 use serde::{Deserialize, Serialize};
-use std::{net::SocketAddr, collections::HashMap, any::Any};
+use std::{net::SocketAddr, collections::HashMap, any::Any, str::FromStr};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream},
     net::{TcpStream, UdpSocket},
 };
 
+use rustls::{Certificate, PrivateKey};
+
 use crate::utils::{chat::Employee, Never};
 
 pub trait Safe: Send + Sync + 'static { }
+
+impl<T> Safe for T  
+where
+    T: Send + Sync + 'static
+{
+    
+}
+
+#[derive(Debug)]
+pub struct Verification {
+    pub certs: Vec<Certificate>,
+    pub key: PrivateKey,
+}
 
 pub trait Options {
     fn set_option(options: &HashMap<String, Box<dyn Any>>);
 }
 
 #[async_trait::async_trait]
+pub trait Accept {
+    type Socket: SimpleStream + Safe;
+    async fn accept(&self) -> anyhow::Result<Self::Socket>;
+}
+
+#[async_trait::async_trait]
+pub trait Connect {
+    type Socket: SimpleStream + Safe;   
+    async fn connect(&self, addr: SocketAddr) -> anyhow::Result<Self::Socket>;
+}
+
+#[async_trait::async_trait]
+pub trait FFactory: Sized + Safe {
+    type Acceptor: Accept;
+    type Connector: Connect;
+    async fn bind(&self, addr: SocketAddr) -> anyhow::Result<Self::Acceptor>;
+    async fn make(&self) -> anyhow::Result<Self::Connector>;
+}
+
+#[async_trait::async_trait]
 pub trait Factory: Sized + Safe {
     type Socket: SimpleStream + Safe;
-    type Listener: Safe;
-    async fn bind(&self, addr: SocketAddr) -> anyhow::Result<Self::Listener>;
-    async fn accept(&self, listener: &Self::Listener) -> anyhow::Result<(Self::Socket, SocketAddr)>;
+    type Acceptor: Safe;
+    async fn bind(&self, addr: SocketAddr) -> anyhow::Result<Self::Acceptor>;
+    async fn accept(&self, acceptor: &Self::Acceptor) -> anyhow::Result<(Self::Socket, SocketAddr)>;
     async fn connect(&self, addr: SocketAddr) -> anyhow::Result<Self::Socket>;
 }
 
@@ -33,6 +69,43 @@ pub struct Port {
 }
 
 
+#[derive(Debug, Clone)]
+pub enum Address {
+    SocketAddr(SocketAddr),
+    Hostname(String, SocketAddr)
+}
+
+impl std::fmt::Display for Address {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Address::SocketAddr(addr) => write!(f, "{}", addr),
+            Address::Hostname(name, addr) => write!(f, "{}({})", name, addr),
+        }
+    }
+}
+
+impl Address {
+    pub async fn resolve(address: &str) -> anyhow::Result<Self> {
+        if let Ok(addr) = SocketAddr::from_str(address) {
+            Ok(Address::SocketAddr(addr))
+        } else {
+            let addrs: Vec<_> = tokio::net::lookup_host(address).await?.collect();
+            Ok(Address::Hostname(
+                address.to_string(), 
+                *addrs.first().ok_or(anyhow::anyhow!("can't no resolve address: {}", address))?
+            ))
+        }
+
+
+    }
+    
+    pub fn socketaddr(&self) -> SocketAddr {
+        match self {
+            Address::SocketAddr(addr) => *addr,
+            Address::Hostname(_, addr) => *addr,
+        }
+    }
+}
 
 
 
@@ -47,6 +120,12 @@ pub enum Command {
 
 pub trait SimpleStream: SimpleRead  + SimpleWrite + Unpin { }
 
+impl<T> SimpleStream for T 
+where 
+    T: SimpleRead + SimpleWrite + Unpin
+{
+    
+}
 
 // impl Stream for TcpStream { }
 

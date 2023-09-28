@@ -4,7 +4,7 @@ mod monitor;
 use crate::protocol::udp::UdpClient;
 use crate::protocol::Factory;
 use crate::protocol::{
-    BasicProtocol, Port, SimpleRead, SimpleStream
+    BasicProtocol, Port, SimpleRead, SimpleStream, Address
 };
 use controller::TcpSocketInfo;
 use controller::UdpRecverInfo;
@@ -45,7 +45,7 @@ pub struct Server<T>
 where
     T: Factory,
 {
-    addr: SocketAddr,
+    addr: Address,
     tcp_sockets: ARwLock<HashMap<i64, Vec<(TcpSocketInfo, oneshot::Sender<()>)>>>,
     udp_recvers: ARwLock<HashMap<i64, Vec<(UdpRecverInfo, oneshot::Sender<()>)>>>,
     using_ports: ARwLock<HashSet<Port>>,
@@ -58,7 +58,7 @@ where
 {
     fn clone(&self) -> Self {
         Self {
-            addr: self.addr,
+            addr: self.addr.clone(),
             tcp_sockets: Arc::clone(&self.tcp_sockets),
             using_ports: Arc::clone(&self.using_ports),
             udp_recvers: Arc::clone(&self.udp_recvers),
@@ -72,13 +72,13 @@ where
     T: Factory,
     T::Socket: SimpleStream,
 {
-    pub fn new(addr: SocketAddr, protocol: T) -> Self {
+    pub fn new(addr: Address, factory: T) -> Self {
         Self {
             addr,
             tcp_sockets: Default::default(),
             using_ports: Default::default(),
             udp_recvers: Default::default(),
-            factory: Arc::new(protocol),
+            factory: Arc::new(factory),
         }
     }
     // async fn bind(addr: SocketAddr) -> anyhow::Result<Self> {
@@ -87,7 +87,7 @@ where
 
     pub fn run(self) {
         tokio::spawn(async move {
-            let listener = self.factory.bind(self.addr).await?;
+            let listener = self.factory.bind(self.addr.socketaddr()).await?;
             loop {
                 match self.factory.accept(&listener).await {
                     Ok((socket, _)) => {
