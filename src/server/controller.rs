@@ -30,20 +30,20 @@ pub struct UdpAddress {
 
 pub struct UdpRecverInfo {
     pub port: u16,
-    pub number: i64,
+    pub number: u128,
     pub socket: UdpClient,
 }
 
 pub struct TcpSocketInfo {
     pub port: u16,
-    pub number: i64,
+    pub number: u128,
     pub socket: TcpStream,
 }
 
 pub struct Controller<T: Factory> {
     server: Server<T>,
     socket: T::Socket,
-    id: Option<i64>,
+    id: Option<u128>,
     heartbeat_interval: Option<u64>,
     ports: HashSet<Port>,
     leader: chat::Leader<(), Message, Port>,
@@ -66,32 +66,32 @@ where
 
     pub fn run(mut self) {
         tokio::spawn(async move {
-            self.accept_client().await?;
-            self.accept_config().await?;
-            self.start_monitors();
-            use tokio::time::timeout;
-            let duration = Duration::from_millis(self.heartbeat_interval.unwrap() * 5);
-            loop {
-                tokio::select! {
-                    result = timeout(duration, SimpleRead::read(&mut self.socket)) => {
-                        match result {
-                            Ok(Ok(msg)) if msg.len() != 0 => {
+            let result: Result<(), anyhow::Error> = async {
+                self.accept_client().await?;
+                self.accept_config().await?;
+                self.start_monitors();
+                use tokio::time::timeout;
+                let duration = Duration::from_millis(self.heartbeat_interval.unwrap() * 5);
+                loop {
+                    tokio::select! {
+                        result = timeout(duration, SimpleRead::read(&mut self.socket)) => {
+                            let msg = result??;
+                            if msg.len() > 0 {
                                 self.recv_msg(msg)?;
-                            }
-                            _ => {
-                                log::info!("Client disconnect {} {:?}", self.id.unwrap(), result);
-                                self.cleanup().await;
-                                break;                                
+                            } else {
+                                anyhow::bail!("Client disconnect nomarlly");
                             }
                         }
-                    }
-                    result = self.leader.receive() => {
-                        let (port, msg) = result;
-                        self.new_channel(port, msg).await?;
+                        result = self.leader.receive() => {
+                            let (port, msg) = result;
+                            self.new_channel(port, msg).await?;
+                        }
                     }
                 }
-            }
-            anyhow::Ok(())
+            }.await;
+
+            log::info!("Client diconnect, state: {:?}", result);
+            self.cleanup().await;
         });
     }
     
@@ -99,10 +99,10 @@ where
         let msg: client::Message = serde_json::from_slice(&msg)?;
         match msg {
             client::Message::Heartbeat => {
-                log::trace!("heartbeat from client");
+                log::trace!("Heartbeat from client");
             },
             _ => {
-                log::warn!("undefined msg: {:?}", msg);
+                log::warn!("Undefined msg: {:?}", msg);
             }
         }
         Ok(())
@@ -123,7 +123,7 @@ where
                 .await?;
             }
             Message::Error => {
-                log::warn!("some port maybe is used");
+                log::warn!("port({port}) may already be occupied");
                 self.leader.fired(&port);
             }
         }
@@ -135,7 +135,7 @@ where
         port: Port,
         socket: UdpClient
     ) -> anyhow::Result<()> {
-        let number = time::OffsetDateTime::now_utc().unix_timestamp();
+        let number = uuid::Uuid::new_v4().as_u128();
         self.server
             .add_waiting_udp_recver(
                 self.id.unwrap(),
@@ -154,7 +154,7 @@ where
     }
 
     async fn new_tcp_channel(&mut self, port: Port, socket: TcpStream) -> anyhow::Result<()> {
-        let number = time::OffsetDateTime::now_utc().unix_timestamp();
+        let number = uuid::Uuid::new_v4().as_u128();
         let msg = ServerMessage::NewChannel {
             port,
             number,
@@ -177,15 +177,22 @@ where
     }
 
     async fn cleanup(&self) {
+        let Some(id) = self.id else { return; };
+
         self.leader.broadcast(&()).await;
+
         let mut write_lock = self.server.tcp_sockets.write().await;
-        write_lock.remove(&self.id.unwrap());
+        write_lock.remove(&id);
+
+        let mut write_lock = self.server.udp_recvers.write().await;
+        write_lock.remove(&id);
+
         let mut write_lock = self.server.using_ports.write().await;
         write_lock.retain(|port| !self.ports.contains(port));
     }
 
     async fn accept_client(&mut self) -> anyhow::Result<()> {
-        let id = time::OffsetDateTime::now_utc().unix_timestamp();
+        let id = uuid::Uuid::new_v4().as_u128();
         let msg = ServerMessage::AcceptClient { id };
         let msg = serde_json::to_vec(&msg)?;
         self.socket.write(&msg).await?;
@@ -217,7 +224,7 @@ where
         } else {
             ServerMessage::AcceptConfig(Accepted::Part(success.clone()))
         };
-        log::info!("accept config: {:?}", msg);
+        log::info!("Accept config: {:?}", msg);
         let msg = serde_json::to_vec(&msg)?;
         self.socket.write(&msg).await?;
         self.ports = success.iter().map(|v| *v).collect::<HashSet<Port>>();
@@ -226,7 +233,7 @@ where
 
     fn start_monitors(&mut self) {
         for i in &self.ports {
-            log::info!("Start listening: {:?}", i);
+            log::info!("Start listening: {}", i);
             if let BasicProtocol::Tcp = i.protocol {
                 let tcp_monitor = monitor::Tcp::new(*i, self.leader.hire(i));
                 tcp_monitor.run();

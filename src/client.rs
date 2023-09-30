@@ -10,19 +10,27 @@ use super::server::{Accepted, Message as ServerMessage};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Message {
+
+    #[serde(rename="new_client")]
     NewClient,
+    
+    #[serde(rename="accept_channel")]
     AcceptChannel {
-        from: i64,
+        from: u128,
         // server_port: u16,
         // client_port: u16,
         // protocol: BasicProtocol,
         port: Port,
-        number: i64,
+        number: u128,
     },
+
+    #[serde(rename="push_config")]
     PushConfig {
         ports: Vec<Port>,
         heartbeat_interval: u64
     },
+
+    #[serde(rename="heartbeat")]
     Heartbeat,
 }
 
@@ -34,15 +42,13 @@ where
 {
     addr: Address,
     socket: T::Socket,
-    id: Option<i64>,
+    connector: Arc<T::Connector>,
+    id: Option<u128>,
     links: HashMap<Port, SocketAddr>,
-    // tcp_links: HashMap<u16, u16>,
-    // udp_links: HashMap<u16, u16>,
     accept_conflict: bool,
     factory: Arc<T>,
     heartbeat_interval: u64,
     retry_time: u32
-    // _marker: PhantomData<T>
 }
 
 impl<T: Factory> Client<T> {
@@ -65,11 +71,13 @@ impl<T: Factory> Client<T> {
 
     pub async fn connect(addr: Address, factory: T) -> anyhow::Result<Self> {
         log::info!("Try to connect to server: {addr:?}");
-        let socket = factory.connect(addr.socketaddr()).await?;
-        log::info!("Successfully connected to the server: {addr:?}");
+        let connector = factory.make().await?;
+        let socket = factory.connect(&connector, addr.socketaddr()).await?;
+        log::info!("Successfully connected to the server: {addr}");
         Ok(Self {
             addr,
             socket,
+            connector: Arc::new(connector),
             id: None,
             links: Default::default(),
             // tcp_links: Default::default(),
@@ -94,7 +102,7 @@ impl<T: Factory> Client<T> {
             Ok(())
         } else {
             log::info!("Server rejected client");
-            Err(anyhow::anyhow!("incorret msg: {:?}", msg))
+            Err(anyhow::anyhow!("Incorret msg: {:?}", msg))
         }
     }
 
@@ -105,7 +113,7 @@ impl<T: Factory> Client<T> {
             heartbeat_interval: self.heartbeat_interval
         };
         let msg = serde_json::to_vec(&msg)?;
-        log::info!("Start to push config");
+        log::info!("Start to push config: {}", String::from_utf8(msg.to_vec()).unwrap());
         self.socket.write(&msg).await?;
 
         log::info!("Finish pushing config end");
@@ -122,7 +130,7 @@ impl<T: Factory> Client<T> {
             ServerMessage::AcceptConfig(Accepted::Part(ports)) if self.accept_conflict => {
                 if ports.is_empty() && !self.links.is_empty() {
                     log::error!("No config was accepted");
-                    Err(anyhow::anyhow!("no config was accepted"))
+                    Err(anyhow::anyhow!("No config was accepted"))
                 } else {
                     log::info!("The server only accepted a partial configuration, id: {id}");
                     self.links.retain(|k, _| ports.contains(&k));
@@ -131,8 +139,8 @@ impl<T: Factory> Client<T> {
                 }
             }
             _ => {
-                log::info!("Push configuration failed, id: {id}");
-                Err(anyhow::anyhow!("push config failed: {:?}", msg))
+                log::error!("Push config failed, id: {id}");
+                Err(anyhow::anyhow!("Push config failed: {:?}", msg))
             }
         }
     }
@@ -163,8 +171,21 @@ impl<T: Factory> Client<T> {
                 anyhow::Ok(())
             }.await;
 
-            log::info!("Retry to connect: {:?}", result);
-
+            match result {
+                Ok(_) => {
+                    log::info!("Maybe server was closed");
+                },
+                Err(ref err) => {
+                    if err.is::<std::io::Error>() {
+                        let error = err.downcast_ref::<std::io::Error>().unwrap();
+                        log::info!("Socket: io error: {}", error);
+                    } else if err.is::<serde_json::error::Error>() {
+                        log::info!("Json: serde_json error: {}", err.downcast_ref::<serde_json::error::Error>().unwrap());
+                    } else if err.is::<quinn::ReadError>() {
+                        log::info!("Quic: readError: {}", err.downcast_ref::<quinn::ReadError>().unwrap());
+                    }
+                },
+            }
 
             self.reconnect_to_server().await?;
         }
@@ -174,10 +195,12 @@ impl<T: Factory> Client<T> {
     async fn reconnect_to_server(&mut self) -> anyhow::Result<()> {
         let mut retry_times = self.retry_time;
         if retry_times <= 0 {
-            anyhow::bail!("set retry_times > 0 to enable reconnect to server");
+            log::info!("Reconnecting to server was disable");
+            anyhow::bail!("Reconnecting to server was disable");
         }
+        log::info!("Try to connect again");
         loop {
-            match self.factory.connect(self.addr.socketaddr()).await {
+            match self.factory.connect(&self.connector, self.addr.socketaddr()).await {
                 Ok(socket) => {
                     self.socket = socket;
                     log::info!("Reconnect successfully");
@@ -191,7 +214,6 @@ impl<T: Factory> Client<T> {
                         return Err(anyhow::Error::from(err));
                     }
                     tokio::time::sleep(Duration::from_secs(3)).await;
-                    continue;
                 },
             }
         }
@@ -206,10 +228,9 @@ impl<T: Factory> Client<T> {
 
     fn recv_msg(&mut self, msg: Vec<u8>) -> anyhow::Result<()> {
         let msg = serde_json::from_slice::<ServerMessage>(&msg)?;
-        log::info!("recv msg: {msg:?}");
         match msg {
             ServerMessage::NewChannel { port, number } => {
-                log::info!("ready to accept channel: {:?}", port);
+                log::info!("Ready to accept channel: {:?} {}", port, number);
                 self.accept_channel(port, number);
             }
             _ => {
@@ -219,23 +240,22 @@ impl<T: Factory> Client<T> {
         Ok(())
     }
 
-    fn accept_channel(&self, port: Port, number: i64) {
+    fn accept_channel(&self, port: Port, number: u128) {
         let id = self.id.unwrap();
         let local_addr = match self.links.get(&port) {
             Some(p) => *p,
             None => return,
         };
 
-        log::info!("local addr: {local_addr}");
-
         let addr = self.addr.clone();
         let factory = self.factory.clone();
+        let connector = self.connector.clone();
         tokio::spawn(async move {
             if let BasicProtocol::Tcp = port.protocol {
-                log::info!("start to connect to local addr: {addr:?}");
+                log::info!("Start to connect to local addr: {addr:?}");
                 let mut local_socket = TcpStream::connect(local_addr).await?;
 
-                let mut socket = factory.connect(addr.socketaddr()).await?;
+                let mut socket = factory.connect(&connector, addr.socketaddr()).await?;
                 let msg = Message::AcceptChannel {
                     from: id,
                     port,
@@ -244,9 +264,8 @@ impl<T: Factory> Client<T> {
                 let msg = serde_json::to_vec(&msg)?;
                 socket.write(&msg).await?;
 
-                log::info!("copy tcp bidirectional local_addr: {}", local_addr);
+                log::info!("Start to copy tcp bidirectional local_addr: {}", local_addr);
                 let result = tokio::io::copy_bidirectional(&mut socket, &mut local_socket).await;
-                log::info!("copy tcp result: {:?}", result);
                 result?;
             } else {
                 let udp_socket = UdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?;
@@ -254,7 +273,7 @@ impl<T: Factory> Client<T> {
                     .connect(local_addr)
                     .await?;
 
-                let mut socket = factory.connect(addr.socketaddr()).await?;
+                let mut socket = factory.connect(&connector, addr.socketaddr()).await?;
                 let msg = Message::AcceptChannel {
                     from: id,
                     port,

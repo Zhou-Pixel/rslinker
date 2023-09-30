@@ -1,3 +1,7 @@
 /target
 /.cargo
 /certs
+./server.toml
+./client.toml
+server.toml
+client.toml

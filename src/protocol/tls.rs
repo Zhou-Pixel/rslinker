@@ -13,7 +13,7 @@ use tokio::{
 };
 use tokio_rustls::{TlsAcceptor, TlsConnector, TlsStream};
 
-use rustls::{server::AllowAnyAuthenticatedClient, Certificate, PrivateKey, RootCertStore};
+use rustls::{server::AllowAnyAuthenticatedClient, Certificate, RootCertStore};
 
 // pub enum TlsFactory {
 //     Server {
@@ -111,6 +111,7 @@ impl TlsFactory {
 impl Factory for TlsFactory {
     type Socket = TlsSocket;
     type Acceptor = TlsListner;
+    type Connector = TlsLinker;
     async fn bind(&self, addr: SocketAddr) -> anyhow::Result<Self::Acceptor> {
         let server_config = self
             .server_config
@@ -173,7 +174,9 @@ impl Factory for TlsFactory {
         &self,
         listener: &Self::Acceptor,
     ) -> anyhow::Result<(Self::Socket, SocketAddr)> {
+        log::info!("Tls: accept ");
         let (socket, addr) = listener.listner.accept().await?;
+        log::info!("Tls: new connection {addr}");
         let tls = listener.acceptor.accept(socket).await?;
 
         Ok((
@@ -185,8 +188,8 @@ impl Factory for TlsFactory {
             addr,
         ))
     }
-    
-    async fn connect(&self, addr: SocketAddr) -> anyhow::Result<Self::Socket> {
+
+    async fn make(&self) -> anyhow::Result<Self::Connector> {
         let client_config = self
             .client_config
             .as_ref()
@@ -217,11 +220,21 @@ impl Factory for TlsFactory {
 
         let connector = TlsConnector::from(Arc::new(config));
 
-        let domain = rustls::ServerName::try_from(client_config.server_name.as_str())?;
+        Ok(TlsLinker {
+            connector,
+            server_name: client_config.server_name.clone()
+        })     
+    }
+    
+    async fn connect(&self, connector: &Self::Connector, addr: SocketAddr) -> anyhow::Result<Self::Socket> {
 
+        let domain = rustls::ServerName::try_from(connector.server_name.as_str())?;
+
+        log::info!("start to connnect");
         let stream = TcpStream::connect(addr).await?;
+        log::info!("Tls client conneceted!");
 
-        let socket = connector.connect(domain, stream).await?;
+        let socket = connector.connector.connect(domain, stream).await?;
 
         let socket = TlsStream::Client(socket);
 
@@ -261,6 +274,11 @@ pub struct TlsClientConfig {
 pub struct TlsListner {
     acceptor: TlsAcceptor,
     listner: TcpListener,
+}
+
+pub struct TlsLinker {
+    connector: TlsConnector,
+    server_name: String
 }
 
 pub struct TlsSocket {
@@ -324,17 +342,17 @@ impl SimpleRead for TlsSocket {
     async fn read(&mut self) -> anyhow::Result<Vec<u8>> {
         use tokio::io::AsyncReadExt;
         let size = if let Some(size) = self.size {
-            size - self.buf.len()
+            size
         } else {
             self.read_size().await?;
             self.size.unwrap()
         };
-
+        
         while self.buf.len() < size {
             self.socket.read_buf(&mut self.buf).await?;
         }
         self.size = None;
-        Ok(std::mem::take(&mut self.buf).to_vec())
+        Ok(self.buf.split_to(size).to_vec())
     }
 }
 
@@ -363,8 +381,9 @@ impl TlsSocket {
         if !is_little_endian() {
             tmp.reverse();
         }
+        let size: u64 = unsafe {std::ptr::read(tmp.as_ptr() as *const _)};
 
-        self.size = Some(unsafe {std::ptr::read(tmp.as_ptr() as *const _)});
+        self.size = Some(size as usize);
         Ok(())
     }
 }

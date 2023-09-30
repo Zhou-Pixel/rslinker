@@ -5,8 +5,8 @@ use tokio::{
 };
 
 
-fn make_client_config() -> Configure {
-    Configure {
+fn make_client_config() -> Configuration {
+    Configuration {
         client: vec![
             Client {
                 server_addr: "127.0.0.1".to_string(),
@@ -94,7 +94,7 @@ async fn read_client_config_toml() -> anyhow::Result<()> {
     let mut file = fs::File::open("./client.toml").await?;
     let mut content = String::new();
     file.read_to_string(&mut content).await?;
-    let config: Configure = toml::from_str(&content)?;
+    let config: Configuration = toml::from_str(&content)?;
     println!("config is: {:#?}", config);
     Ok(())
 }

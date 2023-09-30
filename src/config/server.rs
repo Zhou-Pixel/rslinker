@@ -6,16 +6,22 @@ fn addr_default_value() -> String {
 }
 
 #[derive(Deserialize, Serialize)]
+pub struct Configuration {
+    pub server: Server,
+
+    #[serde(default="tcp_config_default_value")]
+    pub tcp_config: TcpConfig,
+    pub quic_config: Option<QuicConfig>,
+    pub tls_config: Option<TlsConfig>
+}
+
+#[derive(Deserialize, Serialize)]
 pub struct Server {
     pub port: u16,
     #[serde(default="addr_default_value")]
     pub addr: String,
     pub protocol: String,
     
-    #[serde(default="tcp_config_default_value")]
-    pub tcp_config: TcpConfig,
-    pub quic_config: Option<QuicConfig>,
-    pub tls_config: Option<TlsConfig>
 }
 
 
@@ -36,8 +42,12 @@ pub struct TcpConfig {
 
 #[derive(Deserialize, Serialize)]
 pub struct QuicConfig {
+    pub ca: Option<String>,
+
+    #[serde(default)]
+    pub enable_client_auth: bool,
     pub cert: String,
-    pub key: String,
+    pub key: String
 }
 
 

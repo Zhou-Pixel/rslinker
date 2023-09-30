@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, pin::Pin, task::{Poll, Context}, io::{IoSlice, self}};
 use tokio::{net::{TcpListener, TcpStream}, io::{AsyncReadExt, AsyncWriteExt}};
 
-use super::{Safe, SimpleRead, SimpleStream, SimpleWrite};
+use super::{SimpleRead, SimpleWrite};
 
 use tokio::io::{AsyncWrite, AsyncRead};
 use bytes::BytesMut;
@@ -27,6 +27,7 @@ impl TcpFactory {
 impl super::Factory for TcpFactory {
     type Socket = TcpSocket;
     type Acceptor = TcpListener;
+    type Connector = ();
     async fn bind(&self, addr: SocketAddr) -> anyhow::Result<Self::Acceptor> {
         Ok(TcpListener::bind(addr).await?)
     }
@@ -41,7 +42,13 @@ impl super::Factory for TcpFactory {
         }, addr))
     }
 
-    async fn connect(&self, addr: SocketAddr) -> anyhow::Result<Self::Socket> {
+
+    async fn make(&self) -> anyhow::Result<Self::Connector> {
+        Ok(())
+    }
+
+
+    async fn connect(&self, _: &(), addr: SocketAddr) -> anyhow::Result<Self::Socket> {
         let socket = TcpStream::connect(addr).await?;
         log::info!("connected!: {addr} {socket:?} {:?}", socket.peer_addr());
         socket.set_nodelay(self.nodelay)?;

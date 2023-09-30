@@ -5,10 +5,7 @@ pub mod tls;
 
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, collections::HashMap, any::Any, str::FromStr};
-use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream},
-    net::{TcpStream, UdpSocket},
-};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use rustls::{Certificate, PrivateKey};
 
@@ -33,39 +30,28 @@ pub trait Options {
     fn set_option(options: &HashMap<String, Box<dyn Any>>);
 }
 
-#[async_trait::async_trait]
-pub trait Accept {
-    type Socket: SimpleStream + Safe;
-    async fn accept(&self) -> anyhow::Result<Self::Socket>;
-}
-
-#[async_trait::async_trait]
-pub trait Connect {
-    type Socket: SimpleStream + Safe;   
-    async fn connect(&self, addr: SocketAddr) -> anyhow::Result<Self::Socket>;
-}
-
-#[async_trait::async_trait]
-pub trait FFactory: Sized + Safe {
-    type Acceptor: Accept;
-    type Connector: Connect;
-    async fn bind(&self, addr: SocketAddr) -> anyhow::Result<Self::Acceptor>;
-    async fn make(&self) -> anyhow::Result<Self::Connector>;
-}
 
 #[async_trait::async_trait]
 pub trait Factory: Sized + Safe {
     type Socket: SimpleStream + Safe;
     type Acceptor: Safe;
+    type Connector: Safe;
     async fn bind(&self, addr: SocketAddr) -> anyhow::Result<Self::Acceptor>;
     async fn accept(&self, acceptor: &Self::Acceptor) -> anyhow::Result<(Self::Socket, SocketAddr)>;
-    async fn connect(&self, addr: SocketAddr) -> anyhow::Result<Self::Socket>;
+    async fn make(&self) -> anyhow::Result<Self::Connector>;
+    async fn connect(&self, connector: &Self::Connector, addr: SocketAddr) -> anyhow::Result<Self::Socket>;
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Hash)]
 pub struct Port {
     pub port: u16,
     pub protocol: BasicProtocol,
+}
+
+impl std::fmt::Display for Port {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}({})", self.protocol, self.port)
+    }
 }
 
 
@@ -107,17 +93,6 @@ impl Address {
     }
 }
 
-
-
-
-
-pub enum Command {
-    Close,
-}
-
-
-// pub trait Stream: Unpin + AsyncRead + AsyncWrite { }
-
 pub trait SimpleStream: SimpleRead  + SimpleWrite + Unpin { }
 
 impl<T> SimpleStream for T 
@@ -127,29 +102,16 @@ where
     
 }
 
-// impl Stream for TcpStream { }
-
-
 
 #[async_trait::async_trait]
 pub trait SimpleRead: AsyncRead + Unpin {
-    async fn read(&mut self) -> anyhow::Result<Vec<u8>> {
-        let size = self.read_u64_le().await? as u64;
-        let mut buf = vec![0; size as usize];
-        self.read_exact(&mut buf).await?;
-        anyhow::Ok(buf)
-    }
+    async fn read(&mut self) -> anyhow::Result<Vec<u8>>;
 }
 
 #[async_trait::async_trait]
 pub trait SimpleWrite: AsyncWrite + Unpin {
     // async fn write(&mut self, data: &[u8]) -> anyhow::Result<usize>;
-    async fn write(&mut self, data: &[u8]) -> anyhow::Result<()> {
-        let size = data.len();
-        self.write_u64_le(size as u64).await?;
-        self.write_all(data).await?; 
-        anyhow::Ok(())
-    }
+    async fn write(&mut self, data: &[u8]) -> anyhow::Result<()>;
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Hash)]
@@ -160,17 +122,16 @@ pub enum BasicProtocol {
     Udp,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
-pub enum ReliableProtocol {
-    #[serde(rename="tcp")]
-    Tcp,
-
-    #[serde(rename="quic")]
-    Quic,
-
-    #[serde(rename="tls")]
-    Tls,
+impl std::fmt::Display for BasicProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
+            BasicProtocol::Tcp => "tcp",
+            BasicProtocol::Udp => "udp",
+        };
+        write!(f, "{str}")
+    }
 }
+
 
 pub enum ChannelMessage {
     Cancel,
@@ -216,151 +177,3 @@ where
     Ok(())
 }
 
-// #[async_trait::async_trait]
-// pub trait SimpleSend {
-//     async fn send(&mut self, data: &[u8]) -> anyhow::Result<()>;
-// }
-
-// #[async_trait::async_trait]
-// pub trait SimpleRecv {
-//     async fn recv(&mut self) -> anyhow::Result<Vec<u8>>;
-// }
-
-// pub async fn copy<T>(
-//     channel1: &mut T,
-//     channel2: &mut T,
-//     mut shutdown: Option<Receiver<Command>>,
-// ) -> anyhow::Result<()>
-//     where T: SimpleRead + SimpleWrite
-// {
-//     match shutdown {
-//         Some(ref mut shutdown) => loop {
-//             tokio::select! {
-//                 ret = channel1.read() => {
-//                     let vec = ret?;
-//                     channel2.write(vec.as_slice()).await?;
-//                 },
-//                 ret = channel2.read() => {
-//                     let vec = ret?;
-//                     channel1.write(vec.as_slice()).await?;
-//                 }
-//                 _ = shutdown.recv() => {
-//                     break;
-//                 }
-//             }
-//         },
-//         None => loop {
-//             tokio::select! {
-//                 ret = channel1.read() => {
-//                     let vec = ret?;
-//                     channel2.write(vec.as_slice()).await?;
-//                 },
-//                 ret = channel2.read() => {
-//                     let vec = ret?;
-//                     channel1.write(vec.as_slice()).await?;
-//                 }
-//             }
-//         },
-//     }
-
-//     anyhow::Ok(())
-// }
-
-pub enum LocalSocket<T>
-where
-    T: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
-{
-    Udp(UdpSocket),
-    Tcp(T),
-}
-
-impl<T> LocalSocket<T>
-where
-    T: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
-{
-    pub async fn connect_udp(addr: SocketAddr) -> anyhow::Result<Self> {
-        let socket = UdpSocket::bind("127.0.0.1:0").await?;
-        socket.connect(addr).await?;
-        anyhow::Ok(LocalSocket::Udp(socket))
-    }
-
-    pub fn new_tcp(tcp: T) -> Self {
-        LocalSocket::Tcp(tcp)
-    }
-
-    pub async fn write(&mut self, data: &[u8]) -> anyhow::Result<usize> {
-        let size = match self {
-            LocalSocket::Udp(ref udp) => udp.send(data).await?,
-            LocalSocket::Tcp(ref mut tcp) => {
-                tcp.write_all(data).await?;
-                data.len()
-            }
-        };
-        anyhow::Ok(size)
-    }
-
-    pub async fn read(&mut self) -> anyhow::Result<Vec<u8>> {
-        let mut buf = Vec::with_capacity(4096 * 10);
-        let size = match self {
-            LocalSocket::Udp(ref udp) => udp.recv_buf(&mut buf).await?,
-            LocalSocket::Tcp(ref mut tcp) => tcp.read_to_end(&mut buf).await?,
-        };
-        anyhow::Ok(buf[..size].to_vec())
-    }
-}
-
-impl LocalSocket<TcpStream> {
-    pub async fn connect_tcp_stream(addr: SocketAddr) -> anyhow::Result<Self> {
-        let stream = TcpStream::connect(addr).await?;
-        anyhow::Ok(LocalSocket::Tcp(stream))
-    }
-}
-
-impl LocalSocket<BufStream<TcpStream>> {
-    pub async fn connect_tcp_buf_stream(addr: SocketAddr) -> anyhow::Result<Self> {
-        let stream = TcpStream::connect(addr).await?;
-        let streamer = BufStream::new(stream);
-        anyhow::Ok(LocalSocket::Tcp(streamer))
-    }
-}
-
-// pub async fn copy<T, S>(
-//     channel1: &mut T,
-//     channel2: &mut LocalSocket<S>,
-//     mut shutdown: Option<Receiver<Command>>,
-// ) -> anyhow::Result<()>
-// where
-//     T: SimpleRead + SimpleWrite,
-//     S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
-// {
-//     match shutdown {
-//         Some(ref mut shutdown) => loop {
-//             tokio::select! {
-//                 ret = channel1.read() => {
-//                     let vec = ret?;
-//                     channel2.write(vec.as_slice()).await?;
-//                 },
-//                 ret = channel2.read() => {
-//                     let vec = ret?;
-//                     channel1.write(&vec).await?;
-//                 }
-//                 _ = shutdown.recv() => {
-//                     break;
-//                 }
-//             }
-//         },
-//         None => loop {
-//             tokio::select! {
-//                 ret = channel1.read() => {
-//                     let vec = ret?;
-//                     channel2.write(vec.as_slice()).await?;
-//                 },
-//                 ret = channel2.read() => {
-//                     let vec = ret?;
-//                     channel1.write(&vec).await?;
-//                 }
-//             }
-//         },
-//     }
-//     anyhow::Ok(())
-// }

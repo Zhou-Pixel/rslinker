@@ -1,7 +1,7 @@
 use serde::{ Deserialize, Serialize };
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct Configure {
+pub struct Configuration {
     pub client: Vec<Client>
 }
 
@@ -61,8 +61,13 @@ pub struct TcpConfig {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct QuicConfig {
-    pub cert: String,
-    pub server_name: String
+    pub ca: String,
+    pub server_name: Option<String>,
+
+    #[serde(default)]
+    pub enable_client_auth: bool,
+    pub cert: Option<String>,
+    pub key: Option<String>
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
