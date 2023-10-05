@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-
 fn addr_default_value() -> String {
     "0.0.0.0".to_string()
 }
@@ -9,36 +8,34 @@ fn addr_default_value() -> String {
 pub struct Configuration {
     pub server: Server,
 
-    #[serde(default="tcp_config_default_value")]
+    #[serde(default = "tcp_config_default_value")]
     pub tcp_config: TcpConfig,
     pub quic_config: Option<QuicConfig>,
-    pub tls_config: Option<TlsConfig>
+    pub tls_config: Option<TlsConfig>,
+    pub kcp_config: Option<KcpConfig>
 }
 
 #[derive(Deserialize, Serialize)]
 pub struct Server {
     pub port: u16,
-    #[serde(default="addr_default_value")]
+    #[serde(default = "addr_default_value")]
     pub addr: String,
     pub protocol: String,
-    
 }
 
-
-const fn nodelay_default_value() -> bool { true }
+const fn nodelay_default_value() -> bool {
+    true
+}
 
 const fn tcp_config_default_value() -> TcpConfig {
-    TcpConfig {
-        nodelay: true
-    }
+    TcpConfig { nodelay: true }
 }
 
 #[derive(Deserialize, Serialize)]
 pub struct TcpConfig {
-    #[serde(default="nodelay_default_value")]
-    pub nodelay: bool
+    #[serde(default = "nodelay_default_value")]
+    pub nodelay: bool,
 }
-
 
 #[derive(Deserialize, Serialize)]
 pub struct QuicConfig {
@@ -47,18 +44,20 @@ pub struct QuicConfig {
     #[serde(default)]
     pub enable_client_auth: bool,
     pub cert: String,
-    pub key: String
+    pub key: String,
 }
-
 
 #[derive(Deserialize, Serialize)]
 pub struct TlsConfig {
-
     pub ca: Option<String>,
 
     #[serde(default)]
     pub enable_client_auth: bool,
     pub cert: String,
-    pub key: String
+    pub key: String,
 }
 
+#[derive(Deserialize, Serialize, Debug)]
+pub struct KcpConfig {
+
+}

@@ -1,8 +1,5 @@
 # Rslinker
-***
 rslinker is a NAT traversal tool.
-
-
 
 # Configuration
 
@@ -35,9 +32,6 @@ remote_port = 5525
 protocol = "tcp"
 
 ```
-***
-
-
 ## TLS
 1. Server
 ```toml
@@ -74,7 +68,6 @@ ca = "./certs/ca.cert"
 server_name = "localhost"
 enable_client_auth = false # Same as the client
 ```
-***
 
 ## QUIC
 1. Server
@@ -112,7 +105,6 @@ ca = "./certs/ca.cert"
 server_name = "localhost"
 enable_client_auth = false
 ```
-***
 
 ## All Options
 1. Server
@@ -178,9 +170,7 @@ server_name = "localhost"
 enable_client_auth = true
 ```
 
-
 # Command
-***
 1. run as a server
 ```bash
 rslinker run --server # Default config path: ./server.toml

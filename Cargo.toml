@@ -24,3 +24,4 @@ quinn = "0.10"
 rustls = { version = "0.21", features = ["quic"] }
 rustls-pemfile = "1"
 uuid = { version = "1.4.1", features = ["v4", "fast-rng"] }
+tokio_kcp = "0.9"

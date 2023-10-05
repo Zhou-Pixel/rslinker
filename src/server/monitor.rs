@@ -1,31 +1,33 @@
-use crate::protocol::udp::UdpServer;
+use crate::protocol::udp::{UdpClient, UdpServer};
 use std::net::SocketAddr;
 
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 
 use crate::{protocol::Port, utils::chat};
-use super::controller::Message;
+
+pub enum ChannelMessage {
+    NewTcp(TcpStream),
+    NewUdp(UdpClient),
+    Error,
+}
+
 
 pub struct Udp {
-    port: Port,
-    employee: chat::Employee<(), Message, Port>,
+    addr: SocketAddr,
+    employee: chat::Employee<(), ChannelMessage, Port>,
 }
 
 impl Udp {
-    pub fn new(port: Port, employee: chat::Employee<(), Message, Port>) -> Self {
-        Self {
-            port,
-            employee
-        }
+    pub fn new(addr: SocketAddr, employee: chat::Employee<(), ChannelMessage, Port>) -> Self {
+        Self { addr, employee }
     }
     pub fn run(mut self) {
         tokio::spawn(async move {
-            let addr: SocketAddr = format!("0.0.0.0:{}", self.port.port).parse().unwrap();
-            let mut server = UdpServer::bind(addr).await?;
+            let mut server = UdpServer::bind(self.addr).await?;
             loop {
                 tokio::select! {
                     client = server.accept() => {
-                        self.employee.report(Message::NewUdp(client))?;
+                        self.employee.report(ChannelMessage::NewUdp(client))?;
                     }
                     _ = self.employee.wait() => {
                         break;
@@ -38,28 +40,24 @@ impl Udp {
 }
 
 pub struct Tcp {
-    port: Port,
-    employee: chat::Employee<(), Message, Port>,
+    addr: SocketAddr,
+    employee: chat::Employee<(), ChannelMessage, Port>,
 }
 
 impl Tcp {
-    pub fn new(
-        port: Port,
-        employee: chat::Employee<(), Message, Port>,
-    ) -> Self {
-        Self { port, employee }
+    pub fn new(addr: SocketAddr, employee: chat::Employee<(), ChannelMessage, Port>) -> Self {
+        Self { addr, employee }
     }
 
     pub fn run(mut self) {
         tokio::spawn(async move {
             let result = async {
-                let addr: SocketAddr = format!("0.0.0.0:{}", self.port.port).parse().unwrap();
-                let listener = TcpListener::bind(addr).await?;
+                let listener = TcpListener::bind(self.addr).await?;
                 loop {
                     tokio::select! {
                         result = listener.accept() => {
                             let (socket, _)  = result?;
-                            self.employee.report(Message::NewTcp(socket))?;
+                            self.employee.report(ChannelMessage::NewTcp(socket))?;
                         }
                         _ = self.employee.wait() => {
                             return anyhow::Ok(());
@@ -69,7 +67,7 @@ impl Tcp {
             }
             .await;
             if result.is_err() {
-                self.employee.report(Message::Error)?;
+                self.employee.report(ChannelMessage::Error)?;
             }
             anyhow::Ok(())
         });

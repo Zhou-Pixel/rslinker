@@ -5,16 +5,13 @@ use rslinker::{
         quic::{QuicClientConfig, QuicFactory, QuicServerConfig},
         tcp::TcpFactory,
         tls::{TlsClientConfig, TlsFactory, TlsServerConfig},
-        Address, BasicProtocol, Factory, Port, Verification,
+        Address, BasicProtocol, Factory, Port, Verification, kcp::KcpFactory,
     },
     utils,
 };
-use simplelog::{CombinedLogger, Config, TermLogger};
+use simplelog::{CombinedLogger, Config, LevelFilter, TermLogger};
+use tokio_kcp::KcpConfig;
 use std::{collections::HashMap, path::PathBuf};
-use tokio::{
-    fs::File,
-    io::{self, AsyncReadExt},
-};
 
 #[cfg(test)]
 mod test;
@@ -38,7 +35,7 @@ enum SubCommand {
         config: Option<PathBuf>,
 
         #[arg(short, long, value_name = "LOG_LEVEL")]
-        level: Option<String>
+        level: Option<String>,
     },
 }
 
@@ -46,28 +43,25 @@ enum SubCommand {
 async fn main() -> anyhow::Result<()> {
     let cmd = Command::parse();
 
-
     match cmd.command {
         SubCommand::Run {
             server,
             client,
             config,
-            level
+            level,
         } => {
-
-
             let level = level.unwrap_or("info".to_string());
 
             let level = match level.as_str() {
-                "off" => simplelog::LevelFilter::Off,
-                "error" => simplelog::LevelFilter::Error,
-                "warn" => simplelog::LevelFilter::Warn,
-                "info" => simplelog::LevelFilter::Info,
-                "debug" => simplelog::LevelFilter::Debug,
-                "trace" => simplelog::LevelFilter::Trace,
+                "off" => LevelFilter::Off,
+                "error" => LevelFilter::Error,
+                "warn" => LevelFilter::Warn,
+                "info" => LevelFilter::Info,
+                "debug" => LevelFilter::Debug,
+                "trace" => LevelFilter::Trace,
                 _ => {
-                    eprintln!("warn: Unknow Leve is specified: {level}, default to info");
-                    simplelog::LevelFilter::Info
+                    eprintln!("[WARN]: Unknow Leve is specified: {level}, default to info");
+                    LevelFilter::Info
                 }
             };
 
@@ -86,15 +80,16 @@ async fn main() -> anyhow::Result<()> {
 
             log::info!("Config path is {:?}", path);
 
-            let content = read_config(path).await?;
+            let content = tokio::fs::read(path).await?;
+            let content = String::from_utf8(content.to_vec())?;
 
             if server {
                 let config = toml::from_str::<config::server::Configuration>(&content)?;
-                log::info!("Prepare to run in server mode");
+                log::info!("Prepare to run as server");
                 run_server(config).await?;
             } else {
                 let config: config::client::Configuration = toml::from_str(&content)?;
-                log::info!("Prepare to run in client mode");
+                log::info!("Prepare to run as client");
                 run_client(config).await;
             }
 
@@ -105,16 +100,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn read_config(path: PathBuf) -> io::Result<String> {
-    let mut file: File = tokio::fs::File::open(path).await?;
-
-    let mut content = String::new();
-
-    file.read_to_string(&mut content).await?;
-    Ok(content)
-}
-
-fn log_init(level: simplelog::LevelFilter) -> anyhow::Result<()> {
+fn log_init(level: LevelFilter) -> anyhow::Result<()> {
     CombinedLogger::init(vec![TermLogger::new(
         level,
         Config::default(),
@@ -127,8 +113,7 @@ fn log_init(level: simplelog::LevelFilter) -> anyhow::Result<()> {
 async fn run_server(config: config::server::Configuration) -> anyhow::Result<()> {
     use rslinker::server::Server;
     let server_config = config.server;
-    let addr = format!("{}:{}", server_config.addr, server_config.port);
-    let addr = Address::resolve(&addr).await?;
+    let addr = format!("{}:{}", server_config.addr, server_config.port).parse()?;
     log::info!("server binding addr is: {}", addr);
 
     match server_config.protocol.as_str() {
@@ -184,6 +169,13 @@ async fn run_server(config: config::server::Configuration) -> anyhow::Result<()>
                 enable_client_auth: tls_config.enable_client_auth,
             });
             let server = Server::new(addr, tls_factory);
+            server.run();
+        }
+        "kcp" => {
+            let config = KcpConfig::default();
+
+            let kcp_factory = KcpFactory::from_config(config);
+            let server = Server::new(addr, kcp_factory);
             server.run();
         }
         _ => unimplemented!(),
@@ -267,7 +259,7 @@ async fn run_client(config: config::client::Configuration) {
                             }
                             (false, _, _) => None,
                             _ => anyhow::bail!(
-                                "cert and key must be set if enable_client_auth is true"
+                                "Cert and key must be set if enable_client_auth is true"
                             ),
                         };
 
@@ -281,6 +273,13 @@ async fn run_client(config: config::client::Configuration) {
                         quic_factory.client_config = Some(config);
 
                         run_client_with_config(addr.clone(), quic_factory, i).await?;
+                    }
+                    "kcp" => {
+                        let config = KcpConfig::default();
+
+                        let kcp_factory = KcpFactory::from_config(config);
+
+                        run_client_with_config(addr, kcp_factory, i).await?;
                     }
                     _ => {
                         log::warn!("not support protocol {}", protocol);
@@ -310,10 +309,13 @@ async fn run_client_with_config<T: Factory>(
             "tcp" => BasicProtocol::Tcp,
             "ssh" => BasicProtocol::Tcp,
             "tls" => BasicProtocol::Tcp,
+            "http" => BasicProtocol::Tcp,
+            "https" => BasicProtocol::Tcp,
             "udp" => BasicProtocol::Udp,
             "quic" => BasicProtocol::Udp,
+            "kcp" => BasicProtocol::Udp,
             _ => {
-                log::warn!("Unknown protocol {}", j.protocol);
+                log::error!("Unknown protocol:{}, Skip", j.protocol);
                 continue;
             }
         };
@@ -331,6 +333,7 @@ async fn run_client_with_config<T: Factory>(
         );
     }
 
+    client.set_heartbeat_interval(config.heartbeat_interval);
     client.set_accept_conflict(config.accept_conflict);
     client.set_links(links);
     client.set_retry_times(config.retry_times);

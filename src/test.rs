@@ -4,7 +4,6 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
 };
 
-
 fn make_client_config() -> Configuration {
     Configuration {
         client: vec![
@@ -12,7 +11,7 @@ fn make_client_config() -> Configuration {
                 server_addr: "127.0.0.1".to_string(),
                 server_port: 33445,
                 accept_conflict: false,
-                heartbeat_interval: 1000,
+                heartbeat_interval: Some(1000),
                 retry_times: 3,
                 link: vec![
                     Link {
@@ -29,17 +28,16 @@ fn make_client_config() -> Configuration {
                     },
                 ],
                 protocol: "tls".to_string(),
-                tcp_config: TcpConfig {
-                    nodelay: true
-                },
+                tcp_config: TcpConfig { nodelay: true },
                 quic_config: None,
                 tls_config: None,
+                kcp_config: None
             },
             Client {
                 server_addr: "127.0.0.1".to_string(),
                 server_port: 33445,
                 accept_conflict: false,
-                heartbeat_interval: 1000,
+                heartbeat_interval: Some(1000),
                 retry_times: 3,
                 link: vec![
                     Link {
@@ -56,16 +54,14 @@ fn make_client_config() -> Configuration {
                     },
                 ],
                 protocol: "tcp".to_string(),
-                tcp_config: TcpConfig {
-                    nodelay: true
-                },
+                tcp_config: TcpConfig { nodelay: true },
                 quic_config: None,
                 tls_config: None,
+                kcp_config: None
             },
         ],
     }
 }
-
 
 #[tokio::test]
 async fn write_client_config_json() -> anyhow::Result<()> {

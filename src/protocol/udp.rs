@@ -1,5 +1,5 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use fast_async_mutex::RwLock;
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use tokio::{
     net::UdpSocket,
@@ -16,7 +16,7 @@ pub struct UdpClient {
     addr: SocketAddr,
     recver: UnboundedReceiver<Vec<u8>>,
     socket: Arc<UdpSocket>,
-    table: Arc<RwLock<HashMap<SocketAddr, UnboundedSender<Vec<u8>>>>>
+    table: Arc<RwLock<HashMap<SocketAddr, UnboundedSender<Vec<u8>>>>>,
 }
 
 impl Drop for UdpServer {
@@ -72,7 +72,6 @@ impl UdpServer {
                         break;
                     }
                 }
-                
             }
             anyhow::Ok(())
         });
@@ -86,8 +85,6 @@ impl UdpServer {
     pub async fn accept(&mut self) -> UdpClient {
         self.recver.recv().await.unwrap()
     }
-
-
 }
 
 impl UdpClient {

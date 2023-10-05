@@ -1,17 +1,15 @@
 pub mod chat;
 
+use anyhow::Context;
+use fast_async_mutex::RwLock;
+use rustls::{Certificate, PrivateKey};
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
-use std::task::{self, Poll};
 use std::sync::Arc;
-use anyhow::Context;
-use fast_async_mutex::RwLock;
-use rustls::{PrivateKey, Certificate};
-
+use std::task::{self, Poll};
 
 pub type ARwLock<T> = Arc<RwLock<T>>;
-
 
 pub struct Never;
 
@@ -30,9 +28,10 @@ impl Future for Never {
     }
 }
 
-
 pub async fn load_private_key(path: impl AsRef<Path> + Copy) -> anyhow::Result<PrivateKey> {
-    let key = tokio::fs::read(path).await.context("fail to read private_key")?;
+    let key = tokio::fs::read(path)
+        .await
+        .context("fail to read private_key")?;
     let key = if path.as_ref().extension().map_or(false, |x| x == "der") {
         rustls::PrivateKey(key)
     } else {
@@ -55,7 +54,6 @@ pub async fn load_private_key(path: impl AsRef<Path> + Copy) -> anyhow::Result<P
 
     Ok(key)
 }
-
 
 pub async fn load_certs(path: impl AsRef<Path> + Copy) -> anyhow::Result<Vec<Certificate>> {
     let cert = tokio::fs::read(path).await?;
