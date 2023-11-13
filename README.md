@@ -38,7 +38,7 @@ protocol = "tcp"
 [server]
 port = 33445
 protocol = "tls"
-[tls_config]
+[server.tls_config]
 cert = "./certs/server.cert"
 key = "./certs/server.key"
 enable_client_auth = false # Same as the client
@@ -75,7 +75,7 @@ enable_client_auth = false # Same as the client
 [server]
 port = 33445
 protocol = "quic"
-[tls_config]
+[server.tls_config]
 cert = "./certs/server.cert"
 key = "./certs/server.key"
 enable_client_auth = false # Same as the Client
@@ -114,16 +114,16 @@ port = 33445
 addr = "0.0.0.0"
 protocol = "quic"
 
-[tcp_config]
+[server.tcp_config]
 nodelay = true
 
-[quic_config]
+[server.quic_config]
 cert = "./certs/server.cert"
 key = "./certs/server.key"
 enable_client_auth = true
 ca = "./certs/ca.cert"
 
-[tls_config]
+[server.tls_config]
 cert = "./certs/server.cert"
 key = "./certs/server.key"
 enable_client_auth = true

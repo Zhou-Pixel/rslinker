@@ -5,14 +5,13 @@ fn addr_default_value() -> String {
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct Configuration {
+pub struct SingleServer {
     pub server: Server,
 
-    #[serde(default = "tcp_config_default_value")]
-    pub tcp_config: TcpConfig,
-    pub quic_config: Option<QuicConfig>,
-    pub tls_config: Option<TlsConfig>,
-    pub kcp_config: Option<KcpConfig>
+}
+
+pub struct MultipleServer {
+    pub server: Vec<Server>
 }
 
 #[derive(Deserialize, Serialize)]
@@ -21,20 +20,23 @@ pub struct Server {
     #[serde(default = "addr_default_value")]
     pub addr: String,
     pub protocol: String,
-}
 
-const fn nodelay_default_value() -> bool {
-    true
-}
-
-const fn tcp_config_default_value() -> TcpConfig {
-    TcpConfig { nodelay: true }
+    #[serde(default)]
+    pub tcp_config: TcpConfig,
+    pub quic_config: Option<QuicConfig>,
+    pub tls_config: Option<TlsConfig>,
+    pub kcp_config: Option<KcpConfig>
 }
 
 #[derive(Deserialize, Serialize)]
 pub struct TcpConfig {
-    #[serde(default = "nodelay_default_value")]
     pub nodelay: bool,
+}
+
+impl Default for TcpConfig {
+    fn default() -> Self {
+        Self { nodelay: true }
+    }
 }
 
 #[derive(Deserialize, Serialize)]

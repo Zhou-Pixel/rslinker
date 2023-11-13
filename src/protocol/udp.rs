@@ -46,7 +46,7 @@ impl UdpServer {
             let table: HashMap<SocketAddr, UnboundedSender<Vec<u8>>> = HashMap::new();
             let table = Arc::new(RwLock::new(table));
             loop {
-                let mut buf = vec![];
+                let mut buf = Vec::with_capacity(4096);
                 tokio::select! {
                     result = cloned.recv_buf_from(&mut buf) => {
                         let (size, addr) = result?;

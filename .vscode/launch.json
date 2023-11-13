@@ -38,7 +38,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["--client"],
+            "args": ["run", "--client"],
             "cwd": "${workspaceFolder}"
         },
         {
@@ -56,7 +56,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["--server"],
+            "args": ["run", "--server"],
             "cwd": "${workspaceFolder}"
         },
         {

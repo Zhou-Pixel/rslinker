@@ -1,14 +1,3 @@
-macro_rules! impl_anti_sticky {
-    ($x:ty, $y:ty) => {
-        impl crate::protocol::AntiSticky for $x {
-            type Socket = $y;
-            fn get_mut(&mut self) -> (&mut Self::Socket, &mut Option<usize>, &mut bytes::BytesMut) {
-                (&mut self.socket, &mut self.size, &mut self.buf)
-            }
-        }
-    };
-}
-
 macro_rules! impl_async_read {
     ($type:ty, $inner:tt) => {
         impl tokio::io::AsyncRead for $type {
@@ -21,11 +10,54 @@ macro_rules! impl_async_read {
             }
         }
     };
+    ($type:ty, $inner:tt, $t:tt, $($tr:ident),+) => {
+        impl<$t: $($tr+)*> tokio::io::AsyncRead for $type {
+            fn poll_read(
+                self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+                buf: &mut tokio::io::ReadBuf<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                tokio::io::AsyncRead::poll_read(std::pin::Pin::new(&mut self.get_mut().$inner), cx, buf)
+            }
+        }
+    }
 }
 
 macro_rules! impl_async_write {
     ($type:ty, $inner:tt) => {
         impl tokio::io::AsyncWrite for $type {
+            fn poll_write(
+                self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+                buf: &[u8],
+            ) -> std::task::Poll<Result<usize, std::io::Error>> {
+                tokio::io::AsyncWrite::poll_write(std::pin::Pin::new(&mut self.get_mut().$inner), cx, buf)
+            }
+        
+            fn poll_flush(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), std::io::Error>> {
+                tokio::io::AsyncWrite::poll_flush(std::pin::Pin::new(&mut self.get_mut().$inner), cx)
+            }
+        
+            fn poll_shutdown(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), std::io::Error>> {
+                tokio::io::AsyncWrite::poll_shutdown(std::pin::Pin::new(&mut self.get_mut().$inner), cx)
+            }
+        
+            fn is_write_vectored(&self) -> bool {
+                tokio::io::AsyncWrite::is_write_vectored(&self.$inner)
+            }
+        
+            fn poll_write_vectored(
+                    self: std::pin::Pin<&mut Self>,
+                    cx: &mut std::task::Context<'_>,
+                    bufs: &[std::io::IoSlice<'_>],
+                ) -> std::task::Poll<Result<usize, std::io::Error>> {
+                tokio::io::AsyncWrite::poll_write_vectored(std::pin::Pin::new(&mut self.get_mut().$inner), cx, bufs)
+            }
+        }
+    };
+
+    ($type:ty, $inner:tt, $t:tt, $($tr:ident),+) => {
+        impl<$t: $($tr+)*> tokio::io::AsyncWrite for $type {
             fn poll_write(
                 self: std::pin::Pin<&mut Self>,
                 cx: &mut std::task::Context<'_>,
@@ -62,6 +94,11 @@ macro_rules! impl_async_stream {
         impl_async_read!($type, $inner);
         impl_async_write!($type, $inner);
     };
+
+    ($type:ty, $inner:tt, $t:tt, $($tr:ident),+) => {
+        impl_async_read!($type, $inner, $t, $($tr),+);
+        impl_async_write!($type, $inner, $t, $($tr),+);
+    }
 }
 
 pub mod quic;
@@ -70,10 +107,14 @@ pub mod tls;
 pub mod udp;
 pub mod kcp;
 
+use byteorder::ReadBytesExt;
+use bytes::BufMut;
+use bytes::BytesMut;
 use serde::{Deserialize, Serialize};
-use std::{any::Any, collections::HashMap, net::SocketAddr, str::FromStr};
+use std::{net::SocketAddr, str::FromStr};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-
+use byteorder::WriteBytesExt;
+use byteorder::LittleEndian;
 use rustls::{Certificate, PrivateKey};
 
 
@@ -85,10 +126,6 @@ impl<T> Safe for T where T: Send + Sync + 'static {}
 pub struct Verification {
     pub certs: Vec<Certificate>,
     pub key: PrivateKey,
-}
-
-pub trait Options {
-    fn set_option(options: &HashMap<String, Box<dyn Any>>);
 }
 
 #[async_trait::async_trait]
@@ -120,39 +157,46 @@ impl std::fmt::Display for Port {
 }
 
 #[derive(Debug, Clone)]
-pub enum Address {
+pub enum CacheAddr {
     SocketAddr(SocketAddr),
-    Hostname(String, SocketAddr),
+    Domain(String, SocketAddr),
 }
 
-impl std::fmt::Display for Address {
+impl std::fmt::Display for CacheAddr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Address::SocketAddr(addr) => write!(f, "{}", addr),
-            Address::Hostname(name, addr) => write!(f, "{}({})", name, addr),
+            CacheAddr::SocketAddr(addr) => write!(f, "{}", addr),
+            CacheAddr::Domain(name, addr) => write!(f, "{}({})", name, addr),
         }
     }
 }
 
-impl Address {
+impl CacheAddr {
     pub async fn resolve(address: &str) -> anyhow::Result<Self> {
         if let Ok(addr) = SocketAddr::from_str(address) {
-            Ok(Address::SocketAddr(addr))
+            Ok(CacheAddr::SocketAddr(addr))
         } else {
             let addrs: Vec<_> = tokio::net::lookup_host(address).await?.collect();
-            Ok(Address::Hostname(
+            Ok(CacheAddr::Domain(
                 address.to_string(),
                 *addrs
                     .first()
-                    .ok_or(anyhow::anyhow!("can't no resolve address: {}", address))?,
+                    .ok_or(anyhow::anyhow!("can't resolve address: {}", address))?,
             ))
         }
     }
 
     pub fn socketaddr(&self) -> SocketAddr {
         match self {
-            Address::SocketAddr(addr) => *addr,
-            Address::Hostname(_, addr) => *addr,
+            CacheAddr::SocketAddr(addr) => *addr,
+            CacheAddr::Domain(_, addr) => *addr,
+        }
+    }
+
+    pub fn domain(&self) -> Option<&str> {
+        match self {
+            CacheAddr::SocketAddr(_) => None,
+            CacheAddr::Domain(domain, _) => Some(&domain),
         }
     }
 }
@@ -173,96 +217,93 @@ pub trait SimpleWrite: AsyncWrite + Unpin {
 }
 
 
-#[async_trait::async_trait]
-pub trait AntiSticky {
-    type Socket: AsyncRead + AsyncWrite + Safe + Unpin;
-    fn get_mut(&mut self) -> (&mut Self::Socket, &mut Option<usize>, &mut bytes::BytesMut);
+pub struct AntiStickyStream<T>
+where
+    T: AsyncRead + AsyncWrite + Unpin
+{
+    socket: T,
+    w_buf: bytes::BytesMut,
+    r_buf: bytes::BytesMut,
+    size: Option<usize>
+}
 
-    // This method is cancellation safe.
-    async fn read_size(&mut self) -> anyhow::Result<()> {
-        use tokio::io::AsyncReadExt;
-
-        let (socket, size, buf) = self.get_mut();
-        fn is_little_endian() -> bool {
-            union Check {
-                l: u16,
-                s: [u8; 2],
-            }
-            unsafe {
-                let c = Check { l: 0x0102 };
-                return c.s[0] == 2;
-            }
-        }
-
-        let u64size = std::mem::size_of::<u64>();
-        while buf.len() < u64size {
-            socket.read_buf(buf).await?;
-        }
-
-        let mut tmp = buf.split_to(u64size);
-        if !is_little_endian() {
-            tmp.reverse();
-        }
-        let size_u64: u64 = unsafe { std::ptr::read(tmp.as_ptr() as *const _) };
-
-        *size = Some(size_u64 as usize);
-
-        Ok(())
-
-    }
-
-    // This method is cancellation safe.
+impl<T: AsyncWrite + AsyncRead + Unpin> AntiStickyStream<T> {
     async fn read_one(&mut self) -> anyhow::Result<Vec<u8>> {
-        if self.is_size_none() {
+        if self.size.is_none() {
             self.read_size().await?;
         }
-        let (socket, size, buf) = self.get_mut();
-        let size_usize = size.unwrap();
-        while buf.len() < size_usize {
-            socket.read_buf(buf).await?;
+        let size = self.size.unwrap();
+
+        while self.r_buf.len() < size {
+            self.socket.read_buf(&mut self.r_buf).await?;
         }
-        *size = None;
-        Ok(buf.split_to(size_usize).to_vec())
-        
+        self.size = None;
+        Ok(self.r_buf.split_to(size).to_vec())
     }
 
-    // This method is not cancellation safe.
-    async fn write_one(&mut self, data: &[u8]) -> anyhow::Result<()> {
+    async fn read_size(&mut self) -> anyhow::Result<()> {
+        let size = std::mem::size_of::<u64>();
+        while self.r_buf.len() < size {
+            self.socket.read_buf(&mut self.r_buf).await?;
+        }
 
-        let size = data.len();
-        let (socket, ..) = self.get_mut();
-        socket.write_u64_le(size as u64).await?;
-        socket.write_all(data).await?;
-        socket.flush().await?;
+        let tmp = self.r_buf.split_to(size);
 
+        let size: u64 = ReadBytesExt::read_u64::<LittleEndian>( &mut tmp.as_ref())?;
+        self.size = Some(size as usize);
         Ok(())
     }
 
-    fn is_size_none(&mut self) -> bool {
-        self.get_mut().1.is_none()
+    async fn write_one(&mut self, data: &[u8]) -> anyhow::Result<()> {
+
+        let size = data.len() as u64;
+        let mut tmp = vec![];
+
+        WriteBytesExt::write_u64::<LittleEndian>(&mut tmp, size)?;
+
+        self.w_buf.put(&tmp[..]);
+        self.w_buf.put(data);
+
+        while self.w_buf.len() > 0 {
+            self.socket.write_buf(&mut self.w_buf).await?;
+        }
+        self.socket.flush().await?;
+        Ok(())
     }
+
+    fn new(socket: T) -> Self {
+        Self {
+            socket,
+            w_buf: BytesMut::new(),
+            r_buf: BytesMut::new(),
+            size: None
+        }
+    }
+
+
 }
 
 #[async_trait::async_trait]
-impl<T> SimpleRead for T 
+impl<T> SimpleRead for AntiStickyStream<T> 
 where
-    T: AntiSticky + Unpin + AsyncRead + Safe
+    T: AsyncRead + AsyncWrite + Unpin + Safe
 {
     async fn read(&mut self) -> anyhow::Result<Vec<u8>> {
         self.read_one().await
     }
 }
 
-
 #[async_trait::async_trait]
-impl<T> SimpleWrite for T 
+impl<T> SimpleWrite for AntiStickyStream<T> 
 where
-    T: AntiSticky + Unpin + AsyncWrite + Safe
+    T: AsyncRead + AsyncWrite + Unpin + Safe
 {
     async fn write(&mut self, data: &[u8]) -> anyhow::Result<()> {
         self.write_one(data).await
     }
 }
+
+impl_async_stream!(AntiStickyStream<T>, socket, T, AsyncWrite, Unpin, AsyncRead);
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BasicProtocol {

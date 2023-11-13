@@ -1,61 +1,59 @@
 use serde::{Deserialize, Serialize};
+use toml::{Value, map::Map};
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct Configuration {
+pub struct MultipleClient {
     pub client: Vec<Client>,
 }
 
-const fn accept_conflict_default_value() -> bool {
-    false
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SingleClient {
+    pub client: Client,
 }
 
-const fn retry_times_default_value() -> u32 {
-    0
-}
-
-const fn tcp_config_default_value() -> TcpConfig {
-    TcpConfig { nodelay: true }
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Client {
     pub server_addr: String,
     pub server_port: u16,
-    #[serde(default = "accept_conflict_default_value")]
+    #[serde(default)]
     pub accept_conflict: bool,
 
     pub heartbeat_interval: Option<u64>,
 
-    #[serde(default = "retry_times_default_value")]
     pub retry_times: u32,
 
     pub link: Vec<Link>,
     pub protocol: String,
 
-    #[serde(default = "tcp_config_default_value")]
+    #[serde(default)]
     pub tcp_config: TcpConfig,
 
     pub quic_config: Option<QuicConfig>,
     pub tls_config: Option<TlsConfig>,
-    pub kcp_config: Option<KcpConfig>
+    pub kcp_config: Option<KcpConfig>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Link {
     pub local_addr: String,
     pub local_port: u16,
     pub remote_port: u16,
     pub protocol: String,
-}
-
-const fn nodelay_default_value() -> bool {
-    true
+    #[serde(flatten)]
+    pub extra: Map<String, Value>
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TcpConfig {
-    #[serde(default = "nodelay_default_value")]
     pub nodelay: bool,
+}
+
+impl Default for TcpConfig {
+    fn default() -> Self {
+        Self { nodelay: true }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

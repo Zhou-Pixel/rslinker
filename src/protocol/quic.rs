@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 use super::Verification;
-use bytes::BytesMut;
+use super::AntiStickyStream;
 use rustls::Certificate;
 
 #[derive(Default, Debug)]
@@ -36,7 +36,7 @@ impl QuicFactory {
 
 #[async_trait::async_trait]
 impl super::Factory for QuicFactory {
-    type Socket = QuicSocket;
+    type Socket = AntiStickyStream<QuicStream>;
     type Acceptor = QuicListener;
     type Connector = QuicConnector;
     async fn bind(&self, addr: SocketAddr) -> anyhow::Result<Self::Acceptor> {
@@ -107,12 +107,7 @@ impl super::Factory for QuicFactory {
         let addr = connection.remote_address();
         let (sender, recver) = connection.accept_bi().await?;
         Ok((
-            QuicSocket {
-                connection,
-                socket: QuicStream(sender, recver),
-                size: None,
-                buf: BytesMut::new(),
-            },
+            AntiStickyStream::new(QuicStream(sender, recver, connection)),
             addr,
         ))
     }
@@ -177,12 +172,7 @@ impl super::Factory for QuicFactory {
             .connect(addr, &connector.server_name)?
             .await?;
         let (sender, recver) = connection.open_bi().await?;
-        Ok(QuicSocket {
-            connection,
-            socket: QuicStream(sender, recver),
-            size: None,
-            buf: BytesMut::new(),
-        })
+        Ok(AntiStickyStream::new(QuicStream(sender, recver, connection)))
     }
 }
 
@@ -195,18 +185,10 @@ pub struct QuicConnector {
     server_name: String,
 }
 
-pub struct QuicSocket {
-    #[allow(dead_code)]
-    connection: quinn::Connection,
-    socket: QuicStream,
-    size: Option<usize>,
-    buf: BytesMut,
-}
 
-pub struct QuicStream(quinn::SendStream, quinn::RecvStream);
+pub struct QuicStream(quinn::SendStream, quinn::RecvStream, quinn::Connection);
 
 
 impl_async_write!(QuicStream, 0);
 impl_async_read!(QuicStream, 1);
-impl_async_stream!(QuicSocket, socket);
-impl_anti_sticky!(QuicSocket, QuicStream);
+

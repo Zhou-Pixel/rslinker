@@ -3,8 +3,7 @@ use std::{
     sync::Arc,
 };
 
-use super::{Factory, Verification};
-use bytes::BytesMut;
+use super::{Factory, Verification, AntiStickyStream};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::{TlsAcceptor, TlsConnector, TlsStream};
 
@@ -25,7 +24,7 @@ impl TlsFactory {
 
 #[async_trait::async_trait]
 impl Factory for TlsFactory {
-    type Socket = TlsSocket;
+    type Socket = AntiStickyStream<TlsStream<TcpStream>>;
     type Acceptor = TlsListener;
     type Connector = TlsLinker;
     async fn bind(&self, addr: SocketAddr) -> anyhow::Result<Self::Acceptor> {
@@ -33,9 +32,6 @@ impl Factory for TlsFactory {
             .server_config
             .as_ref()
             .expect("server config not found");
-        // match (config.enable_client_auth, config.) {
-
-        // }
         let roots = server_config.verification.certs.clone();
 
         let config = rustls::ServerConfig::builder()
@@ -51,7 +47,7 @@ impl Factory for TlsFactory {
                 }
                 client_auth_roots.add(ca)?;
 
-                let client_auth = AllowAnyAuthenticatedClient::new(client_auth_roots);
+                let client_auth: AllowAnyAuthenticatedClient = AllowAnyAuthenticatedClient::new(client_auth_roots);
 
                 config
                     .with_client_cert_verifier(Arc::new(client_auth))
@@ -81,11 +77,7 @@ impl Factory for TlsFactory {
         let tls = listener.acceptor.accept(socket).await?;
 
         Ok((
-            TlsSocket {
-                socket: TlsStream::Server(tls),
-                size: None,
-                buf: Default::default(),
-            },
+            AntiStickyStream::new(TlsStream::Server(tls)),
             addr,
         ))
     }
@@ -140,20 +132,7 @@ impl Factory for TlsFactory {
 
         let socket = TlsStream::Client(socket);
 
-        Ok(TlsSocket {
-            socket,
-            size: None,
-            buf: BytesMut::default(),
-        })
-
-        // Ok(
-        //     TlsSocket {
-        //         socket: TlsStream::Client(connector.connect(
-        //         server_name,
-        //         TcpStream::connect(addr).await?
-        //     ).await?)
-        //     }
-        // )
+        Ok(AntiStickyStream::new(socket))
     }
 }
 
@@ -182,12 +161,3 @@ pub struct TlsLinker {
     server_name: String,
 }
 
-pub struct TlsSocket {
-    socket: TlsStream<TcpStream>,
-    size: Option<usize>,
-    buf: BytesMut,
-}
-
-impl_async_stream!(TlsSocket, socket);
-
-impl_anti_sticky!(TlsSocket, TlsStream<TcpStream>);

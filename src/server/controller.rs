@@ -142,7 +142,7 @@ where
         }
         .await;
 
-        log::info!("Client diconnect, state: {:?}", result);
+        log::info!("Client disconnect, state: {:?}", result);
         let msg = ChannelMessage::Finished(result);
         self.server_employee.report(msg)?;
         self.cleanup().await;
@@ -234,7 +234,7 @@ where
             drop(write_lock);
             let _ = sender.send(());
 
-            log::info!("Tcp: starting copying");
+            log::info!("Tcp: start copying");
 
             tokio::io::copy_bidirectional(&mut socket, &mut tcp_pending_socket).await?;
             anyhow::Ok(())

@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
-use bytes::BytesMut;
+
+use super::AntiStickyStream;
 
 
 #[derive(Default)]
@@ -20,7 +21,7 @@ impl TcpFactory {
 
 #[async_trait::async_trait]
 impl super::Factory for TcpFactory {
-    type Socket = TcpSocket;
+    type Socket = AntiStickyStream<TcpStream>;
     type Acceptor = TcpListener;
     type Connector = ();
     async fn bind(&self, addr: SocketAddr) -> anyhow::Result<Self::Acceptor> {
@@ -34,11 +35,7 @@ impl super::Factory for TcpFactory {
         let (socket, addr) = listener.accept().await?;
         socket.set_nodelay(self.nodelay)?;
         Ok((
-            TcpSocket {
-                socket,
-                size: None,
-                buf: BytesMut::new(),
-            },
+            AntiStickyStream::new(socket),
             addr,
         ))
     }
@@ -50,19 +47,6 @@ impl super::Factory for TcpFactory {
     async fn connect(&self, _: &Self::Connector, addr: SocketAddr) -> anyhow::Result<Self::Socket> {
         let socket = TcpStream::connect(addr).await?;
         socket.set_nodelay(self.nodelay)?;
-        Ok(TcpSocket {
-            socket,
-            size: None,
-            buf: BytesMut::new(),
-        })
+        Ok(AntiStickyStream::new(socket))
     }
 }
-
-pub struct TcpSocket {
-    socket: TcpStream,
-    size: Option<usize>,
-    buf: BytesMut,
-}
-
-impl_async_stream!(TcpSocket, socket);
-impl_anti_sticky!(TcpSocket, TcpStream);

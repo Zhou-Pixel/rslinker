@@ -1,4 +1,4 @@
-use super::Factory;
+use super::{Factory, AntiStickyStream};
 use std::net::SocketAddr;
 use tokio_kcp::{KcpConfig, KcpListener, KcpStream};
 
@@ -14,25 +14,9 @@ impl KcpFactory {
     }
 }
 
-pub struct KcpSocket {
-    socket: KcpStream,
-    size: Option<usize>,
-    buf: bytes::BytesMut,
-}
-
-impl KcpSocket {
-    fn new(socket: KcpStream) -> Self {
-        Self {
-            socket,
-            size: None,
-            buf: bytes::BytesMut::new(),
-        }
-    }
-}
-
 #[async_trait::async_trait]
 impl Factory for KcpFactory {
-    type Socket = KcpSocket;
+    type Socket = AntiStickyStream<KcpStream>;
     type Acceptor = RwLock<KcpListener>;
     type Connector = ();
     async fn bind(&self, addr: SocketAddr) -> anyhow::Result<Self::Acceptor> {
@@ -45,9 +29,8 @@ impl Factory for KcpFactory {
     ) -> anyhow::Result<(Self::Socket, SocketAddr)> {
         let (socket, addr) = acceptor.write().await.accept().await?;
 
-        let socket = KcpSocket::new(socket);
 
-        Ok((socket, addr))
+        Ok((AntiStickyStream::new(socket), addr))
     }
     async fn make(&self) -> anyhow::Result<Self::Connector> {
         Ok(())
@@ -55,10 +38,6 @@ impl Factory for KcpFactory {
 
     async fn connect(&self, _: &Self::Connector, addr: SocketAddr) -> anyhow::Result<Self::Socket> {
         let socket = KcpStream::connect(&self.config, addr).await?;
-        let socket = KcpSocket::new(socket);
-        Ok(socket)
+        Ok(AntiStickyStream::new(socket))
     }
 }
-
-impl_async_stream!(KcpSocket, socket);
-impl_anti_sticky!(KcpSocket, KcpStream);
